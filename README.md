@@ -1,8 +1,9 @@
 # namida_waveform
 
-Cross-platform audio waveform extraction for Namida. Decodes with `libavformat`
-/ `libavcodec` through Dart FFI and native assets, and reduces the stream to RMS
-amplitudes in the `0..100` range.
+Cross-platform audio waveform and cover art palette extraction for Namida.
+Decodes with `libavformat` / `libavcodec` through Dart FFI and native assets,
+and reduces an audio stream to RMS amplitudes in the `0..100` range, or a
+picture to its dominant colors.
 
 ```dart
 final data = await NamidaWaveform.extractInIsolate(path, samplesPerSecond: 100);
@@ -19,6 +20,27 @@ source samples, summed across every channel. Buckets are cut on sample positions
 rather than decoder frame boundaries, so the requested rate is honoured exactly
 and the same audio produces the same number of values in every container.
 
+## Palettes
+
+```dart
+final palette = await NamidaPalette.extractAsync(path: coverPath, maxColors: 16);
+print(palette.colors); // Uint32List of 0xAARRGGBB, most populous first
+```
+
+The picture is decoded natively, sampled on a grid of at most `maxDimension`
+pixels along its longest side, and reduced with the median-cut quantizer of
+Android's Palette (the same one `palette_generator` ports, with identical
+output for the same pixels). JPEG decodes at 1/2, 1/4 or 1/8 resolution
+straight out of the DCT when that still covers the grid. Every still image
+format the linked libavcodec carries is accepted -- JPEG, PNG, WebP, GIF, BMP
+and TIFF in the desktop build, more with ffmpeg-kit -- and the container is
+detected from the bytes, never from the file name.
+
+`extractAsync` runs on a native thread of its own and posts the result back
+through a `NativeCallable.listener`, so no isolate is spawned and no pixel
+buffer ever crosses an isolate boundary. `extract` is the blocking variant for
+callers that already have a worker.
+
 ## Building
 
 | Target | FFmpeg |
@@ -28,8 +50,8 @@ and the same audio produces the same number of values in every container.
 
 For a release, build the desktop library with `build_waveform.sh` in namida's
 `external/ffmpeg_build`, and point `prebuilt_dir` at its output. That script
-builds a decode-only FFmpeg -- every demuxer, audio decoders and parsers only,
-no network and no external libraries -- so the library ends up around 5.5MB and
+builds a decode-only FFmpeg -- every demuxer, audio decoders and parsers, the
+still image decoders and a static zlib for PNG, no network -- so the library
 imports nothing but libc/libm (Linux) or KERNEL32 and the UCRT (Windows).
 
 > Build it on the oldest glibc you support. `verify_linux.sh` fails a library
