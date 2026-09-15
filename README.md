@@ -21,35 +21,44 @@ and the same audio produces the same number of values in every container.
 
 ## Building
 
-| Target | FFmpeg source |
+| Target | FFmpeg |
 | --- | --- |
-| Android | Links against the FFmpeg shipped by `ffmpeg_kit_flutter` (already in the APK). Headers for n6.0 are vendored in `src/ffmpeg/include`. |
-| Linux / macOS | `pkg-config` (`libavformat`, `libavcodec`, `libavutil`). |
-| Windows | The `ffmpeg_dir` user-define below, pointing at an install with `include/` and `lib/`. |
+| Android | Links the FFmpeg `ffmpeg_kit_flutter` already ships inside the APK, so this package adds no decoder of its own. Headers for n6.0 are vendored in `src/ffmpeg/include` to match its ABI. |
+| Linux / Windows | Links a static FFmpeg into the library, since a desktop machine is not guaranteed to have one. |
 
-Release builds should not link against whatever the build machine has
-installed. Configuration comes from the root package's `pubspec.yaml` — build
-hooks run in a semi-hermetic environment, so environment variables do not reach
-them:
+For a release, build the desktop library with `build_waveform.sh` in namida's
+`external/ffmpeg_build`, and point `prebuilt_dir` at its output. That script
+builds a decode-only FFmpeg -- every demuxer and parser, audio decoders only, no
+network and no external libraries -- so the library ends up around 7MB and
+imports nothing but libc/libm (Linux) or KERNEL32 and the UCRT (Windows).
+
+> Build it on the oldest glibc you support. `verify_linux.sh` fails a library
+> built on a newer one, exactly as it does for `ffmpeg`/`ffprobe`.
+
+Without `prebuilt_dir` the hook compiles from source against a system FFmpeg
+found through `pkg-config`, which is fine for development but not for shipping.
+
+## Configuration
+
+Build hooks run in a semi-hermetic environment, so environment variables never
+reach them. Configuration comes from the root package's `pubspec.yaml`:
 
 ```yaml
 hooks:
   user_defines:
     namida_waveform:
       prebuilt_dir: external/ffmpeg_build
-      ffmpeg_dir: external/ffmpeg_build/install/usr/local
 ```
 
 | Key | Purpose |
 | --- | --- |
 | `prebuilt_dir` | Bundle an already built library instead of compiling. Looked up as `<os>/<arch>/<library>`, `<os>/<library>`, then `<library>`. |
-| `ffmpeg_dir` | FFmpeg install (`include/` + `lib/`) to compile against. Links statically when the prefix only carries `.a` archives. |
+| `ffmpeg_dir` | An FFmpeg install (`include/` + `lib/`) to compile against. Links statically when the prefix only carries `.a` archives. |
 | `ffmpeg_kit_aar` | Override the ffmpeg-kit `.aar` the Android build links against. |
 
 Paths resolve against the directory of the `pubspec.yaml` declaring them. Each
 is optional and falls through to the next option when it holds nothing for the
-target, so a checkout that has not produced the artifacts yet still builds
-against a system FFmpeg.
+target, so a checkout that has not built the artifacts still compiles.
 
 ## Credits
 

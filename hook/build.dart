@@ -224,7 +224,16 @@ _FFmpegFlags? _runPkgConfig(List<String> packages, {required bool static, requir
   try {
     result = Process.runSync(
       'pkg-config',
-      [if (static) '--static', '--cflags-only-I', '--libs', ...packages],
+      [
+        // A DESTDIR-staged install keeps `prefix=/usr/local` in its .pc files,
+        // so pkg-config has to recompute it from where the .pc file actually
+        // sits, or every path it reports points at a directory that is not there.
+        if (pkgConfigPath != null) '--define-prefix',
+        if (static) '--static',
+        '--cflags-only-I',
+        '--libs',
+        ...packages,
+      ],
       environment: pkgConfigPath == null ? null : {'PKG_CONFIG_PATH': pkgConfigPath},
     );
   } on ProcessException {
