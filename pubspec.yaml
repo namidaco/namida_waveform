@@ -1,0 +1,29 @@
+name: namida_waveform
+description: "Fast cross-platform audio waveform extraction for Namida, using libav* through Dart FFI and native assets."
+version: 1.0.0
+homepage: https://github.com/namidaco/namida_waveform
+repository: https://github.com/namidaco/namida_waveform
+publish_to: none
+topics:
+  - audio
+  - waveform
+  - ffi
+  - native-assets
+
+environment:
+  sdk: ^3.11.0
+  flutter: ">=3.38.0"
+
+dependencies:
+  code_assets: ^1.1.0
+  ffi: ^2.1.4
+  hooks: ^2.0.0
+  logging: ^1.3.0
+  native_toolchain_c: ^0.19.0
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  ffigen: ^20.1.1
+  flutter_lints: ^6.0.0
+  test: ^1.28.0

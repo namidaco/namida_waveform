@@ -1,0 +1,54 @@
+{
+  "assets": [
+    {
+      "encoding": {
+        "file": "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/.dart_tool/hooks_runner/shared/namida_waveform/build/6b4ebf10e7/libnamida_waveform_native.so",
+        "id": "package:namida_waveform/namida_waveform_bindings_generated.dart",
+        "link_mode": {
+          "type": "dynamic_loading_bundle"
+        }
+      },
+      "type": "code_assets/code"
+    }
+  ],
+  "assets_for_linking": {},
+  "dependencies": [
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/namida_waveform.c",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/COPYING.LGPLv2.1",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/avcodec.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/codec.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/codec_desc.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/codec_id.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/codec_par.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/defs.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/packet.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/version.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavcodec/version_major.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavformat/avformat.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavformat/avio.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavformat/version.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavformat/version_major.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/attributes.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/avconfig.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/avutil.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/buffer.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/channel_layout.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/common.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/dict.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/error.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/frame.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/hwcontext.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/intfloat.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/log.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/macros.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/mathematics.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/mem.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/pixfmt.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/rational.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/samplefmt.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/ffmpeg/include/libavutil/version.h",
+    "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/src/namida_waveform.h"
+  ],
+  "status": "success",
+  "timestamp": "2026-09-15 04:59:39.000"
+}

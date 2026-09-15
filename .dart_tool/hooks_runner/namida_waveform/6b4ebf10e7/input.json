@@ -1,0 +1,21 @@
+{
+  "assets": {},
+  "config": {
+    "build_asset_types": [
+      "code_assets/code"
+    ],
+    "extensions": {
+      "code_assets": {
+        "link_mode_preference": "dynamic",
+        "target_architecture": "x64",
+        "target_os": "linux"
+      }
+    },
+    "linking_enabled": false
+  },
+  "out_dir_shared": "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/.dart_tool/hooks_runner/shared/namida_waveform/build/",
+  "out_file": "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/.dart_tool/hooks_runner/namida_waveform/6b4ebf10e7/output.json",
+  "package_name": "namida_waveform",
+  "package_root": "/mnt/System/Programming/Flutter/_NEW_2023_Used_Packages/namida_waveform/",
+  "user_defines": {}
+}
