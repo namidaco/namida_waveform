@@ -28,8 +28,8 @@ and the same audio produces the same number of values in every container.
 
 For a release, build the desktop library with `build_waveform.sh` in namida's
 `external/ffmpeg_build`, and point `prebuilt_dir` at its output. That script
-builds a decode-only FFmpeg -- every demuxer and parser, audio decoders only, no
-network and no external libraries -- so the library ends up around 7MB and
+builds a decode-only FFmpeg -- every demuxer, audio decoders and parsers only,
+no network and no external libraries -- so the library ends up around 5.5MB and
 imports nothing but libc/libm (Linux) or KERNEL32 and the UCRT (Windows).
 
 > Build it on the oldest glibc you support. `verify_linux.sh` fails a library

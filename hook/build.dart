@@ -43,8 +43,8 @@ void main(List<String> args) async {
   await build(args, (input, output) async {
     if (!input.config.buildCodeAssets) return;
 
-    final targetOS = _enumName(input.config.code.targetOS);
-    final arch = _enumName(input.config.code.targetArchitecture);
+    final targetOS = input.config.code.targetOS;
+    final arch = input.config.code.targetArchitecture;
     final packageName = input.packageName;
     final assetName = '${packageName}_bindings_generated.dart';
 
@@ -68,7 +68,7 @@ void main(List<String> args) async {
     final flags = <String>[];
 
     switch (targetOS) {
-      case 'android':
+      case OS.android:
         final abi = _androidAbi(arch);
         if (abi == null) {
           throw UnsupportedError('namida_waveform: unsupported Android architecture "$arch".');
@@ -81,9 +81,7 @@ void main(List<String> args) async {
         final suffix = abi == 'armeabi-v7a' ? '_neon' : '';
         libraries.addAll(['avformat$suffix', 'avcodec$suffix', 'avutil$suffix', 'm']);
 
-      case 'linux':
-      case 'macOS':
-      case 'windows':
+      case OS.linux || OS.macOS || OS.windows:
         final ffmpeg = _desktopFFmpeg(input, output, targetOS);
         includes.addAll(ffmpeg.includes);
         libraryDirectories.addAll(ffmpeg.libraryDirectories);
@@ -94,7 +92,7 @@ void main(List<String> args) async {
         throw UnsupportedError('namida_waveform: unsupported target OS "$targetOS".');
     }
 
-    if (targetOS != 'windows') flags.add('-fvisibility=hidden');
+    if (targetOS != OS.windows) flags.add('-fvisibility=hidden');
 
     final builder = CBuilder.library(
       name: '${packageName}_native',
@@ -116,19 +114,17 @@ Logger _logger() => Logger('')
   ..level = Level.ALL
   ..onRecord.listen((record) => print(record.message));
 
-String _enumName(Object value) => value.toString().split('.').last;
-
-String? _androidAbi(String arch) => switch (arch) {
-      'arm64' => 'arm64-v8a',
-      'arm' => 'armeabi-v7a',
-      'x64' => 'x86_64',
-      'ia32' || 'x86' => 'x86',
+String? _androidAbi(Architecture arch) => switch (arch) {
+      Architecture.arm64 => 'arm64-v8a',
+      Architecture.arm => 'armeabi-v7a',
+      Architecture.x64 => 'x86_64',
+      Architecture.ia32 => 'x86',
       _ => null,
     };
 
-String _libraryFileName(String targetOS) => switch (targetOS) {
-      'windows' => 'namida_waveform_native.dll',
-      'macOS' => 'libnamida_waveform_native.dylib',
+String _libraryFileName(OS targetOS) => switch (targetOS) {
+      OS.windows => 'namida_waveform_native.dll',
+      OS.macOS => 'libnamida_waveform_native.dylib',
       _ => 'libnamida_waveform_native.so',
     };
 
@@ -144,14 +140,14 @@ String? _definedPath(BuildInput input, BuildOutputBuilder output, String key) {
 /// Looks for an already built library for this target, so release builds can
 /// ship one linked against a known FFmpeg instead of whatever the build machine
 /// happens to have installed.
-File? _findPrebuilt(BuildInput input, BuildOutputBuilder output, {required String targetOS, required String arch}) {
+File? _findPrebuilt(BuildInput input, BuildOutputBuilder output, {required OS targetOS, required Architecture arch}) {
   final directory = _definedPath(input, output, _definePrebuiltDir);
   if (directory == null) return null;
 
   final fileName = _libraryFileName(targetOS);
   for (final candidate in [
-    '$directory/$targetOS/$arch/$fileName',
-    '$directory/$targetOS/$fileName',
+    '$directory/${targetOS.name}/${arch.name}/$fileName',
+    '$directory/${targetOS.name}/$fileName',
     '$directory/$fileName',
   ]) {
     final file = File(candidate);
@@ -178,13 +174,13 @@ class _FFmpegFlags {
 ///
 /// Prefers the prefix in the `ffmpeg_dir` user-define, which release builds
 /// point at their own FFmpeg, and otherwise falls back to a system install.
-_FFmpegFlags _desktopFFmpeg(BuildInput input, BuildOutputBuilder output, String targetOS) {
+_FFmpegFlags _desktopFFmpeg(BuildInput input, BuildOutputBuilder output, OS targetOS) {
   const packages = ['libavformat', 'libavcodec', 'libavutil'];
   final fallbackLibraries = <String>[
     'avformat',
     'avcodec',
     'avutil',
-    if (targetOS != 'windows') 'm',
+    if (targetOS != OS.windows) 'm',
   ];
 
   final root = _definedPath(input, output, _defineFFmpegDir);
@@ -206,7 +202,7 @@ _FFmpegFlags _desktopFFmpeg(BuildInput input, BuildOutputBuilder output, String 
   final flags = _runPkgConfig(packages, static: false, pkgConfigPath: null);
   if (flags != null) return flags;
 
-  if (targetOS == 'windows') {
+  if (targetOS == OS.windows) {
     throw StateError(
       'namida_waveform: building from source on Windows needs '
       'hooks.user_defines.namida_waveform.$_defineFFmpegDir pointing at an FFmpeg install '
@@ -286,9 +282,7 @@ String _prepareFFmpegKitLibs(BuildInput input, BuildOutputBuilder output, String
   }
   output.dependencies.add(aar.uri);
 
-  final outputDirectory = Directory.fromUri(
-    input.packageRoot.resolve('.dart_tool/namida_waveform/ffmpeg_kit/$abi/'),
-  );
+  final outputDirectory = Directory.fromUri(input.outputDirectoryShared.resolve('ffmpeg_kit/$abi/'));
   final marker = File.fromUri(outputDirectory.uri.resolve('.extracted'));
   if (marker.existsSync() && marker.readAsStringSync() == aar.path) {
     return outputDirectory.path;

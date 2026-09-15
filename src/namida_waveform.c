@@ -20,31 +20,54 @@
 /// wide level is left alone because the host app uses it too.
 #define NW_LOG_OFFSET 100
 
-/// Sum the squares of `take` sample positions starting at `pos`, across every
-/// channel. `TYPE` is the storage type of the decoder output and `EXPR` maps one
-/// stored value to the `-1..1` range.
-///
-/// Planar and packed are separate branches so the inner loop stays a flat walk
-/// over contiguous memory in both cases.
-#define NW_ACCUMULATE(TYPE, EXPR)                                            \
-  do {                                                                       \
-    if (planar) {                                                            \
-      for (int ch = 0; ch < channels; ch++) {                                \
-        const TYPE* p = ((const TYPE*)frame->extended_data[ch]) + pos;       \
-        for (int i = 0; i < take; i++) {                                     \
-          const double v = (EXPR);                                           \
-          sum += v * v;                                                      \
-        }                                                                    \
-      }                                                                      \
-    } else {                                                                 \
-      const TYPE* p =                                                        \
-          ((const TYPE*)frame->extended_data[0]) + (size_t)pos * channels;   \
-      const int n = take * channels;                                         \
-      for (int i = 0; i < n; i++) {                                          \
-        const double v = (EXPR);                                             \
-        sum += v * v;                                                        \
-      }                                                                      \
-    }                                                                        \
+/// Defines `NAME(p, n)`: the sum of squares of `n` contiguous samples, spread
+/// over four independent accumulators so consecutive adds do not serialise on
+/// one dependency chain. Integer formats accumulate exactly; the caller scales
+/// the total to the `-1..1` domain once, instead of per sample.
+#define NW_DEFINE_SUM_SQUARES(NAME, TYPE, ACC, SQUARE) \
+  static inline double NAME(const TYPE* p, int n) {    \
+    ACC s0 = 0, s1 = 0, s2 = 0, s3 = 0;                \
+    int i = 0;                                         \
+    for (; i + 4 <= n; i += 4) {                       \
+      s0 += SQUARE(p[i]);                              \
+      s1 += SQUARE(p[i + 1]);                          \
+      s2 += SQUARE(p[i + 2]);                          \
+      s3 += SQUARE(p[i + 3]);                          \
+    }                                                  \
+    for (; i < n; i++) s0 += SQUARE(p[i]);             \
+    return (double)((s0 + s1) + (s2 + s3));            \
+  }
+
+#define NW_SQUARE_U8(x) ((int64_t)(((int32_t)(x) - 128) * ((int32_t)(x) - 128)))
+#define NW_SQUARE_S16(x) ((int64_t)((int32_t)(x) * (int32_t)(x)))
+#define NW_SQUARE_DOUBLE(x) ((double)(x) * (double)(x))
+
+NW_DEFINE_SUM_SQUARES(nw_sum_squares_u8, uint8_t, int64_t, NW_SQUARE_U8)
+NW_DEFINE_SUM_SQUARES(nw_sum_squares_s16, int16_t, int64_t, NW_SQUARE_S16)
+NW_DEFINE_SUM_SQUARES(nw_sum_squares_s32, int32_t, double, NW_SQUARE_DOUBLE)
+NW_DEFINE_SUM_SQUARES(nw_sum_squares_s64, int64_t, double, NW_SQUARE_DOUBLE)
+NW_DEFINE_SUM_SQUARES(nw_sum_squares_flt, float, double, NW_SQUARE_DOUBLE)
+NW_DEFINE_SUM_SQUARES(nw_sum_squares_dbl, double, double, NW_SQUARE_DOUBLE)
+
+#define NW_SCALE_U8 (1.0 / (128.0 * 128.0))
+#define NW_SCALE_S16 (1.0 / (32768.0 * 32768.0))
+#define NW_SCALE_S32 (1.0 / (2147483648.0 * 2147483648.0))
+#define NW_SCALE_S64 (1.0 / (9223372036854775808.0 * 9223372036854775808.0))
+
+/// Adds the squares of `take` sample positions starting at `pos`, over every
+/// channel, to `sum`. Planar data is one contiguous run per channel, packed
+/// data one interleaved run, so both stay a flat walk over memory.
+#define NW_ACCUMULATE(SUM_SQUARES, TYPE, SCALE)                                        \
+  do {                                                                                 \
+    if (planar) {                                                                      \
+      for (int ch = 0; ch < channels; ch++) {                                          \
+        const TYPE* p = ((const TYPE*)frame->extended_data[ch]) + pos;                 \
+        sum += SUM_SQUARES(p, take) * (SCALE);                                         \
+      }                                                                                \
+    } else {                                                                           \
+      const TYPE* p = ((const TYPE*)frame->extended_data[0]) + (size_t)pos * channels; \
+      sum += SUM_SQUARES(p, take * channels) * (SCALE);                                \
+    }                                                                                  \
   } while (0)
 
 typedef struct {
@@ -76,11 +99,6 @@ static int nw_buffer_push(NWBuffer* buffer, float value) {
   return 1;
 }
 
-static NWResult* nw_result_new(void) {
-  NWResult* result = (NWResult*)calloc(1, sizeof(NWResult));
-  return result;
-}
-
 static NWResult* nw_fail(NWResult* result, int32_t error) {
   if (result != NULL) result->error = error;
   return result;
@@ -95,7 +113,7 @@ NW_EXPORT void nw_result_free(NWResult* result) {
 }
 
 NW_EXPORT NWResult* nw_extract(const char* path, int32_t samples_per_second) {
-  NWResult* result = nw_result_new();
+  NWResult* result = (NWResult*)calloc(1, sizeof(NWResult));
   if (result == NULL) return NULL;
   if (path == NULL) return nw_fail(result, NW_ERR_OPEN_INPUT);
 
@@ -112,6 +130,7 @@ NW_EXPORT NWResult* nw_extract(const char* path, int32_t samples_per_second) {
   double sum = 0.0;
   int64_t bucket_filled = 0;
   int64_t bucket_samples = 0;
+  int channels = 1;
   int32_t error = NW_OK;
 
   if (avformat_open_input(&fmt_ctx, path, NULL, NULL) < 0) {
@@ -129,6 +148,12 @@ NW_EXPORT NWResult* nw_extract(const char* path, int32_t samples_per_second) {
     goto cleanup;
   }
   AVStream* stream = fmt_ctx->streams[stream_index];
+
+  // Demuxers that can skip a discarded stream's data (mov, matroska, mpegts)
+  // then never read the video out of a video file.
+  for (unsigned i = 0; i < fmt_ctx->nb_streams; i++) {
+    if ((int)i != stream_index) fmt_ctx->streams[i]->discard = AVDISCARD_ALL;
+  }
 
   const AVCodec* decoder = avcodec_find_decoder(stream->codecpar->codec_id);
   if (decoder == NULL) {
@@ -164,12 +189,10 @@ NW_EXPORT NWResult* nw_extract(const char* path, int32_t samples_per_second) {
     result->duration_ms = (int64_t)(stream->duration * av_q2d(stream->time_base) * 1000.0);
   }
 
-  const int sample_rate = dec_ctx->sample_rate > 0 ? dec_ctx->sample_rate : 44100;
-  result->sample_rate = sample_rate;
+  // The container's idea of the rate is only a fallback: the decoder reports
+  // the real one on the first frame, and raw streams have no container at all.
+  result->sample_rate = dec_ctx->sample_rate;
   result->channels = dec_ctx->ch_layout.nb_channels;
-
-  bucket_samples = sample_rate / samples_per_second;
-  if (bucket_samples < 1) bucket_samples = 1;
 
   if (result->duration_ms > 0) {
     const int64_t estimate = (result->duration_ms * samples_per_second) / 1000 + 64;
@@ -187,63 +210,78 @@ NW_EXPORT NWResult* nw_extract(const char* path, int32_t samples_per_second) {
   }
 
   int draining = 0;
+  // Set while `packet` still holds data the decoder refused with EAGAIN; it is
+  // resent once the frames it was waiting on have been read.
+  int pending = 0;
   for (;;) {
     if (!draining) {
-      const int read = av_read_frame(fmt_ctx, packet);
-      if (read < 0) {
-        draining = 1;
-        avcodec_send_packet(dec_ctx, NULL);
-      } else if (packet->stream_index != stream_index) {
-        av_packet_unref(packet);
-        continue;
-      } else {
-        const int sent = avcodec_send_packet(dec_ctx, packet);
-        av_packet_unref(packet);
-        if (sent < 0 && sent != AVERROR(EAGAIN)) {
-          // A corrupt packet should not throw away everything decoded so far.
+      if (!pending) {
+        if (av_read_frame(fmt_ctx, packet) < 0) {
+          draining = 1;
+          avcodec_send_packet(dec_ctx, NULL);
+        } else if (packet->stream_index != stream_index) {
+          av_packet_unref(packet);
           continue;
+        }
+      }
+      if (!draining) {
+        const int sent = avcodec_send_packet(dec_ctx, packet);
+        pending = sent == AVERROR(EAGAIN);
+        if (!pending) {
+          av_packet_unref(packet);
+          // A corrupt packet should not throw away everything decoded so far.
+          if (sent < 0) continue;
         }
       }
     }
 
+    int received = 0;
     for (;;) {
       if (avcodec_receive_frame(dec_ctx, frame) < 0) break;
+      received = 1;
 
       const enum AVSampleFormat format = (enum AVSampleFormat)frame->format;
       const int planar = av_sample_fmt_is_planar(format);
-      const int channels = frame->ch_layout.nb_channels > 0 ? frame->ch_layout.nb_channels : 1;
       const int nb_samples = frame->nb_samples;
+      channels = frame->ch_layout.nb_channels > 0 ? frame->ch_layout.nb_channels : 1;
+
+      if (bucket_samples == 0) {
+        const int sample_rate = frame->sample_rate > 0 ? frame->sample_rate : dec_ctx->sample_rate;
+        result->sample_rate = sample_rate > 0 ? sample_rate : 44100;
+        result->channels = channels;
+        bucket_samples = result->sample_rate / samples_per_second;
+        if (bucket_samples < 1) bucket_samples = 1;
+      }
 
       int pos = 0;
       while (pos < nb_samples) {
         int take = (int)(bucket_samples - bucket_filled);
         if (take > nb_samples - pos) take = nb_samples - pos;
-        if (take <= 0) break;
 
         switch (format) {
           case AV_SAMPLE_FMT_U8:
           case AV_SAMPLE_FMT_U8P:
-            NW_ACCUMULATE(uint8_t, ((double)p[i] - 128.0) * (1.0 / 128.0));
+            NW_ACCUMULATE(nw_sum_squares_u8, uint8_t, NW_SCALE_U8);
             break;
           case AV_SAMPLE_FMT_S16:
           case AV_SAMPLE_FMT_S16P:
-            NW_ACCUMULATE(int16_t, (double)p[i] * (1.0 / 32768.0));
+            NW_ACCUMULATE(nw_sum_squares_s16, int16_t, NW_SCALE_S16);
             break;
           case AV_SAMPLE_FMT_S32:
           case AV_SAMPLE_FMT_S32P:
-            NW_ACCUMULATE(int32_t, (double)p[i] * (1.0 / 2147483648.0));
+            NW_ACCUMULATE(nw_sum_squares_s32, int32_t, NW_SCALE_S32);
             break;
           case AV_SAMPLE_FMT_S64:
           case AV_SAMPLE_FMT_S64P:
-            NW_ACCUMULATE(int64_t, (double)p[i] * (1.0 / 9223372036854775808.0));
+            NW_ACCUMULATE(nw_sum_squares_s64, int64_t, NW_SCALE_S64);
             break;
           case AV_SAMPLE_FMT_FLT:
           case AV_SAMPLE_FMT_FLTP:
-            NW_ACCUMULATE(float, (double)p[i]);
+            NW_ACCUMULATE(nw_sum_squares_flt, float, 1.0);
             break;
           case AV_SAMPLE_FMT_DBL:
           case AV_SAMPLE_FMT_DBLP:
-            NW_ACCUMULATE(double, p[i]);
+            NW_ACCUMULATE(nw_sum_squares_dbl, double, 1.0);
             break;
           default:
             error = NW_ERR_UNSUPPORTED_FORMAT;
@@ -271,11 +309,16 @@ NW_EXPORT NWResult* nw_extract(const char* path, int32_t samples_per_second) {
 
     // Once flushed, the inner loop only exits with nothing left to receive.
     if (draining) break;
+    // A packet the decoder keeps refusing without producing anything would
+    // otherwise be resent forever.
+    if (pending && !received) {
+      av_packet_unref(packet);
+      pending = 0;
+    }
   }
 
   // Flush whatever is left in the last partial bucket.
   if (bucket_filled > 0) {
-    const int channels = dec_ctx->ch_layout.nb_channels > 0 ? dec_ctx->ch_layout.nb_channels : 1;
     const double mean = sum / (double)(bucket_filled * channels);
     nw_buffer_push(&buffer, (float)(sqrt(mean) * 100.0));
   }
