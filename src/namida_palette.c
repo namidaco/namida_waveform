@@ -21,8 +21,8 @@
 
 #define NP_DEFAULT_MAX_COLORS 16
 #define NP_MAX_COLORS_LIMIT 256
-#define NP_DEFAULT_MAX_DIMENSION 240
-#define NP_MIN_DIMENSION 8
+#define NP_DEFAULT_MAX_HEIGHT 240
+#define NP_MIN_HEIGHT 8
 #define NP_IO_BUFFER_SIZE (32 * 1024)
 
 /// Added to the decoder context's log level so a damaged file cannot spam the
@@ -210,148 +210,181 @@ static inline void np_yuv_to_rgb(int y, int u, int v, int full_range, int* r, in
   }
 }
 
-/// Source column for each sampled column: the pixel under the center of each
-/// grid cell, i.e. a nearest-neighbour downscale without the scaled bitmap.
-static int* np_sample_columns(int width, int sampled_width) {
-  int* xs = (int*)malloc((size_t)sampled_width * sizeof(int));
-  if (xs == NULL) return NULL;
+enum { NP_KIND_PACKED, NP_KIND_PAL8, NP_KIND_YUV, NP_KIND_GBR, NP_KIND_MONO };
+
+/// Turns one row of accumulated cells into histogram entries and clears it.
+static void np_flush_cells(uint32_t* acc, int sampled_width, uint32_t* hist) {
   for (int tx = 0; tx < sampled_width; tx++) {
-    xs[tx] = (int)(((int64_t)(2 * tx + 1) * width) / (2 * sampled_width));
+    uint32_t* cell = acc + (size_t)tx * 4;
+    const uint32_t n = cell[3];
+    if (n != 0) {
+      const int r = (int)((cell[0] + n / 2) / n);
+      const int g = (int)((cell[1] + n / 2) / n);
+      const int b = (int)((cell[2] + n / 2) / n);
+      hist[NP_BIN(r, g, b)]++;
+    }
+    cell[0] = cell[1] = cell[2] = cell[3] = 0;
   }
-  return xs;
 }
 
-static inline int np_sample_row(int height, int sampled_height, int ty) {
-  return (int)(((int64_t)(2 * ty + 1) * height) / (2 * sampled_height));
+/// Converts one source row into straight 8-bit RGBA, `0` alpha marking a
+/// pixel to skip. Every pixel format this understands lands here, so the
+/// sampler below has a single layout to average.
+static void np_convert_row(const AVFrame* frame, int kind, const NPPacked* packed, const NPYuv* yuv, int sy,
+                           uint8_t* out) {
+  const int width = frame->width;
+  const uint8_t* const* data = (const uint8_t* const*)frame->data;
+  const int* linesize = frame->linesize;
+
+  switch (kind) {
+    case NP_KIND_PACKED: {
+      const uint8_t* row = data[0] + (size_t)sy * linesize[0];
+      for (int sx = 0; sx < width; sx++, out += 4) {
+        const uint8_t* p = row + (size_t)sx * packed->bpp;
+        out[0] = p[packed->r];
+        out[1] = p[packed->g];
+        out[2] = p[packed->b];
+        out[3] = packed->a >= 0 ? p[packed->a] : 255;
+      }
+      break;
+    }
+    case NP_KIND_PAL8: {
+      const uint32_t* palette = (const uint32_t*)data[1];
+      const uint8_t* row = data[0] + (size_t)sy * linesize[0];
+      for (int sx = 0; sx < width; sx++, out += 4) {
+        const uint32_t c = palette[row[sx]];
+        out[0] = (uint8_t)(c >> 16);
+        out[1] = (uint8_t)(c >> 8);
+        out[2] = (uint8_t)c;
+        out[3] = (uint8_t)(c >> 24);
+      }
+      break;
+    }
+    case NP_KIND_YUV: {
+      const int cy = sy >> yuv->shift_y;
+      const uint8_t* y_row = data[0] + (size_t)sy * linesize[0];
+      const uint8_t* u_row = data[1] + (size_t)cy * linesize[1];
+      const uint8_t* v_row = yuv->semi ? u_row : data[2] + (size_t)cy * linesize[2];
+      const uint8_t* a_row = yuv->alpha ? data[3] + (size_t)sy * linesize[3] : NULL;
+      for (int sx = 0; sx < width; sx++, out += 4) {
+        const int cx = sx >> yuv->shift_x;
+        int u, v;
+        if (yuv->semi) {
+          u = u_row[2 * cx + yuv->swap_uv];
+          v = v_row[2 * cx + 1 - yuv->swap_uv];
+        } else {
+          u = u_row[cx];
+          v = v_row[cx];
+        }
+        int r, g, b;
+        np_yuv_to_rgb(y_row[sx], u, v, yuv->full_range, &r, &g, &b);
+        out[0] = (uint8_t)r;
+        out[1] = (uint8_t)g;
+        out[2] = (uint8_t)b;
+        out[3] = a_row != NULL ? a_row[sx] : 255;
+      }
+      break;
+    }
+    case NP_KIND_GBR: {
+      const uint8_t* g_row = data[0] + (size_t)sy * linesize[0];
+      const uint8_t* b_row = data[1] + (size_t)sy * linesize[1];
+      const uint8_t* r_row = data[2] + (size_t)sy * linesize[2];
+      const uint8_t* a_row = frame->format == AV_PIX_FMT_GBRAP ? data[3] + (size_t)sy * linesize[3] : NULL;
+      for (int sx = 0; sx < width; sx++, out += 4) {
+        out[0] = r_row[sx];
+        out[1] = g_row[sx];
+        out[2] = b_row[sx];
+        out[3] = a_row != NULL ? a_row[sx] : 255;
+      }
+      break;
+    }
+    case NP_KIND_MONO: {
+      const int one_is_white = frame->format == AV_PIX_FMT_MONOBLACK;
+      const uint8_t* row = data[0] + (size_t)sy * linesize[0];
+      for (int sx = 0; sx < width; sx++, out += 4) {
+        const int bit = (row[sx >> 3] >> (7 - (sx & 7))) & 1;
+        const uint8_t value = (bit == one_is_white) ? 255 : 0;
+        out[0] = out[1] = out[2] = value;
+        out[3] = 255;
+      }
+      break;
+    }
+  }
 }
 
-/// Counts the picture's pixels into `hist`, sampling at most `max_dimension`
-/// pixels along the longest side. Fully transparent pixels are skipped, as
-/// Palette does. Returns 0 for a pixel format this cannot read.
-static int np_sample_frame(const AVFrame* frame, int max_dimension, uint32_t* hist) {
+/// Counts the picture's pixels into `hist`, box-averaged onto a grid at most
+/// `max_height` rows tall, the width following the aspect ratio: every source
+/// pixel contributes to the cell it falls in, like a filtered downscale would,
+/// without producing the scaled bitmap. Fully transparent pixels are skipped,
+/// as Palette does, and a cell holding nothing else is dropped. Returns 0 for
+/// a pixel format this cannot read.
+static int np_sample_frame(const AVFrame* frame, int max_height, uint32_t* hist) {
   const int width = frame->width;
   const int height = frame->height;
   if (width <= 0 || height <= 0) return 0;
 
-  const int longest = width > height ? width : height;
   int sampled_width = width;
   int sampled_height = height;
-  if (longest > max_dimension) {
-    sampled_width = (int)(((int64_t)width * max_dimension + longest / 2) / longest);
-    sampled_height = (int)(((int64_t)height * max_dimension + longest / 2) / longest);
+  if (height > max_height) {
+    sampled_height = max_height;
+    sampled_width = (int)(((int64_t)width * max_height + height / 2) / height);
     if (sampled_width < 1) sampled_width = 1;
-    if (sampled_height < 1) sampled_height = 1;
   }
 
   const enum AVPixelFormat format = (enum AVPixelFormat)frame->format;
   NPPacked packed = {0, 0, 0, 0, -1};
   NPYuv yuv = {0, 0, 0, 0, 0, 0};
   int kind;
-  enum { KIND_PACKED, KIND_PAL8, KIND_YUV, KIND_GBR, KIND_MONO };
   if (np_packed_layout(format, &packed)) {
-    kind = KIND_PACKED;
+    kind = NP_KIND_PACKED;
   } else if (format == AV_PIX_FMT_PAL8) {
-    kind = KIND_PAL8;
+    kind = NP_KIND_PAL8;
   } else if (np_yuv_layout(format, &yuv)) {
-    kind = KIND_YUV;
+    kind = NP_KIND_YUV;
     if (frame->color_range == AVCOL_RANGE_JPEG) yuv.full_range = 1;
   } else if (format == AV_PIX_FMT_GBRP || format == AV_PIX_FMT_GBRAP) {
-    kind = KIND_GBR;
+    kind = NP_KIND_GBR;
   } else if (format == AV_PIX_FMT_MONOBLACK || format == AV_PIX_FMT_MONOWHITE) {
-    kind = KIND_MONO;
+    kind = NP_KIND_MONO;
   } else {
     return 0;
   }
 
-  int* xs = np_sample_columns(width, sampled_width);
-  if (xs == NULL) return 0;
+  // Sums of r, g, b and the pixel count per grid column of the current cell row.
+  uint32_t* acc = (uint32_t*)calloc((size_t)sampled_width * 4, sizeof(uint32_t));
+  uint8_t* rgba = (uint8_t*)malloc((size_t)width * 4);
+  int* col_of = (int*)malloc((size_t)width * sizeof(int));
+  if (acc == NULL || rgba == NULL || col_of == NULL) {
+    free(acc);
+    free(rgba);
+    free(col_of);
+    return 0;
+  }
+  for (int sx = 0; sx < width; sx++) col_of[sx] = (int)(((int64_t)sx * sampled_width) / width);
 
-  const uint8_t* const* data = (const uint8_t* const*)frame->data;
-  const int* linesize = frame->linesize;
-
-  switch (kind) {
-    case KIND_PACKED: {
-      for (int ty = 0; ty < sampled_height; ty++) {
-        const uint8_t* row = data[0] + (size_t)np_sample_row(height, sampled_height, ty) * linesize[0];
-        for (int tx = 0; tx < sampled_width; tx++) {
-          const uint8_t* p = row + (size_t)xs[tx] * packed.bpp;
-          if (packed.a >= 0 && p[packed.a] == 0) continue;
-          hist[NP_BIN(p[packed.r], p[packed.g], p[packed.b])]++;
-        }
-      }
-      break;
+  int cell_row = 0;
+  for (int sy = 0; sy < height; sy++) {
+    const int ty = (int)(((int64_t)sy * sampled_height) / height);
+    if (ty != cell_row) {
+      np_flush_cells(acc, sampled_width, hist);
+      cell_row = ty;
     }
-    case KIND_PAL8: {
-      const uint32_t* palette = (const uint32_t*)data[1];
-      for (int ty = 0; ty < sampled_height; ty++) {
-        const uint8_t* row = data[0] + (size_t)np_sample_row(height, sampled_height, ty) * linesize[0];
-        for (int tx = 0; tx < sampled_width; tx++) {
-          const uint32_t c = palette[row[xs[tx]]];
-          if ((c >> 24) == 0) continue;
-          hist[NP_BIN((c >> 16) & 255, (c >> 8) & 255, c & 255)]++;
-        }
-      }
-      break;
-    }
-    case KIND_YUV: {
-      for (int ty = 0; ty < sampled_height; ty++) {
-        const int sy = np_sample_row(height, sampled_height, ty);
-        const int cy = sy >> yuv.shift_y;
-        const uint8_t* y_row = data[0] + (size_t)sy * linesize[0];
-        const uint8_t* u_row = data[1] + (size_t)cy * linesize[1];
-        const uint8_t* v_row = yuv.semi ? u_row : data[2] + (size_t)cy * linesize[2];
-        const uint8_t* a_row = yuv.alpha ? data[3] + (size_t)sy * linesize[3] : NULL;
-        for (int tx = 0; tx < sampled_width; tx++) {
-          const int sx = xs[tx];
-          if (a_row != NULL && a_row[sx] == 0) continue;
-          const int cx = sx >> yuv.shift_x;
-          int u, v;
-          if (yuv.semi) {
-            u = u_row[2 * cx + yuv.swap_uv];
-            v = v_row[2 * cx + 1 - yuv.swap_uv];
-          } else {
-            u = u_row[cx];
-            v = v_row[cx];
-          }
-          int r, g, b;
-          np_yuv_to_rgb(y_row[sx], u, v, yuv.full_range, &r, &g, &b);
-          hist[NP_BIN(r, g, b)]++;
-        }
-      }
-      break;
-    }
-    case KIND_GBR: {
-      const int has_alpha = format == AV_PIX_FMT_GBRAP;
-      for (int ty = 0; ty < sampled_height; ty++) {
-        const int sy = np_sample_row(height, sampled_height, ty);
-        const uint8_t* g_row = data[0] + (size_t)sy * linesize[0];
-        const uint8_t* b_row = data[1] + (size_t)sy * linesize[1];
-        const uint8_t* r_row = data[2] + (size_t)sy * linesize[2];
-        const uint8_t* a_row = has_alpha ? data[3] + (size_t)sy * linesize[3] : NULL;
-        for (int tx = 0; tx < sampled_width; tx++) {
-          const int sx = xs[tx];
-          if (a_row != NULL && a_row[sx] == 0) continue;
-          hist[NP_BIN(r_row[sx], g_row[sx], b_row[sx])]++;
-        }
-      }
-      break;
-    }
-    case KIND_MONO: {
-      const int one_is_white = format == AV_PIX_FMT_MONOBLACK;
-      for (int ty = 0; ty < sampled_height; ty++) {
-        const uint8_t* row = data[0] + (size_t)np_sample_row(height, sampled_height, ty) * linesize[0];
-        for (int tx = 0; tx < sampled_width; tx++) {
-          const int sx = xs[tx];
-          const int bit = (row[sx >> 3] >> (7 - (sx & 7))) & 1;
-          const int value = (bit == one_is_white) ? 255 : 0;
-          hist[NP_BIN(value, value, value)]++;
-        }
-      }
-      break;
+    np_convert_row(frame, kind, &packed, &yuv, sy, rgba);
+    const uint8_t* p = rgba;
+    for (int sx = 0; sx < width; sx++, p += 4) {
+      if (p[3] == 0) continue;
+      uint32_t* cell = acc + (size_t)col_of[sx] * 4;
+      cell[0] += p[0];
+      cell[1] += p[1];
+      cell[2] += p[2];
+      cell[3]++;
     }
   }
+  np_flush_cells(acc, sampled_width, hist);
 
-  free(xs);
+  free(col_of);
+  free(rgba);
+  free(acc);
   return 1;
 }
 
@@ -546,7 +579,7 @@ NP_EXPORT void np_result_free(NPResult* result) {
 }
 
 NP_EXPORT NPResult* np_extract(const char* path, const uint8_t* data, int64_t data_size, int32_t max_colors,
-                               int32_t max_dimension) {
+                               int32_t max_height) {
   NPResult* result = (NPResult*)calloc(1, sizeof(NPResult));
   if (result == NULL) return NULL;
 
@@ -556,8 +589,8 @@ NP_EXPORT NPResult* np_extract(const char* path, const uint8_t* data, int64_t da
   }
   if (max_colors <= 0) max_colors = NP_DEFAULT_MAX_COLORS;
   if (max_colors > NP_MAX_COLORS_LIMIT) max_colors = NP_MAX_COLORS_LIMIT;
-  if (max_dimension <= 0) max_dimension = NP_DEFAULT_MAX_DIMENSION;
-  if (max_dimension < NP_MIN_DIMENSION) max_dimension = NP_MIN_DIMENSION;
+  if (max_height <= 0) max_height = NP_DEFAULT_MAX_HEIGHT;
+  if (max_height < NP_MIN_HEIGHT) max_height = NP_MIN_HEIGHT;
 
   AVIOContext* io = NULL;
   AVFormatContext* fmt_ctx = NULL;
@@ -656,9 +689,8 @@ NP_EXPORT NPResult* np_extract(const char* path, const uint8_t* data, int64_t da
   if (decoder->max_lowres > 0 && stream->codecpar->codec_id == AV_CODEC_ID_MJPEG) {
     int width, height;
     if (np_jpeg_dimensions(packet->data, packet->size, &width, &height)) {
-      const int longest = width > height ? width : height;
       int lowres = 0;
-      while (lowres < decoder->max_lowres && (longest >> (lowres + 1)) >= max_dimension) lowres++;
+      while (lowres < decoder->max_lowres && (height >> (lowres + 1)) >= max_height) lowres++;
       dec_ctx->lowres = lowres;
     }
   }
@@ -691,7 +723,7 @@ NP_EXPORT NPResult* np_extract(const char* path, const uint8_t* data, int64_t da
     goto cleanup;
   }
 
-  if (!np_sample_frame(frame, max_dimension, hist)) {
+  if (!np_sample_frame(frame, max_height, hist)) {
     error = NP_ERR_UNSUPPORTED_FORMAT;
     goto cleanup;
   }
@@ -749,7 +781,7 @@ typedef struct {
   uint8_t* data;
   int64_t data_size;
   int32_t max_colors;
-  int32_t max_dimension;
+  int32_t max_height;
   int64_t request_id;
   np_callback callback;
 } NPRequest;
@@ -762,7 +794,7 @@ static void np_request_free(NPRequest* request) {
 
 static void np_request_run(NPRequest* request) {
   NPResult* result = np_extract(request->path, request->data, request->data_size, request->max_colors,
-                                request->max_dimension);
+                                request->max_height);
   request->callback(request->request_id, result);
   np_request_free(request);
 }
@@ -797,7 +829,7 @@ static int np_spawn(NPRequest* request) {
 #endif
 
 NP_EXPORT int32_t np_extract_async(const char* path, const uint8_t* data, int64_t data_size, int32_t max_colors,
-                                   int32_t max_dimension, int64_t request_id, np_callback callback) {
+                                   int32_t max_height, int64_t request_id, np_callback callback) {
   if (callback == NULL) return NP_ERR_THREAD;
   if (data == NULL || data_size <= 0) {
     data = NULL;
@@ -824,7 +856,7 @@ NP_EXPORT int32_t np_extract_async(const char* path, const uint8_t* data, int64_
     memcpy(request->path, path, length);
   }
   request->max_colors = max_colors;
-  request->max_dimension = max_dimension;
+  request->max_height = max_height;
   request->request_id = request_id;
   request->callback = callback;
 

@@ -27,11 +27,12 @@ final palette = await NamidaPalette.extractAsync(path: coverPath, maxColors: 16)
 print(palette.colors); // Uint32List of 0xAARRGGBB, most populous first
 ```
 
-The picture is decoded natively, sampled on a grid of at most `maxDimension`
-pixels along its longest side, and reduced with the median-cut quantizer of
-Android's Palette (the same one `palette_generator` ports, with identical
-output for the same pixels). JPEG decodes at 1/2, 1/4 or 1/8 resolution
-straight out of the DCT when that still covers the grid. Every still image
+The picture is decoded natively, box-averaged onto a grid at most `maxHeight`
+rows tall (the width follows the aspect ratio, and every source pixel weighs
+in), and reduced with the median-cut quantizer of Android's Palette (the same
+one `palette_generator` ports, with identical output for the same pixels). JPEG
+decodes at 1/2, 1/4 or 1/8 resolution straight out of the DCT when that still
+covers the grid. Every still image
 format the linked libavcodec carries is accepted -- JPEG, PNG, WebP, GIF, BMP
 and TIFF in the desktop build, more with ffmpeg-kit -- and the container is
 detected from the bytes, never from the file name.

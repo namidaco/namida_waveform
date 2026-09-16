@@ -59,12 +59,12 @@ final class NPResult extends Struct {
 typedef NPCallback = Void Function(Int64 requestId, Pointer<NPResult> result);
 
 @Native<Pointer<NPResult> Function(Pointer<Char>, Pointer<Uint8>, Int64, Int32, Int32)>(symbol: 'np_extract')
-external Pointer<NPResult> npExtract(Pointer<Char> path, Pointer<Uint8> data, int dataSize, int maxColors, int maxDimension);
+external Pointer<NPResult> npExtract(Pointer<Char> path, Pointer<Uint8> data, int dataSize, int maxColors, int maxHeight);
 
 // Leaf: the call only copies its inputs and starts a thread, which lets a
 // Dart-heap `Uint8List` be passed by address without an intermediate copy.
 @Native<Int32 Function(Pointer<Char>, Pointer<Uint8>, Int64, Int32, Int32, Int64, Pointer<NativeFunction<NPCallback>>)>(symbol: 'np_extract_async', isLeaf: true)
-external int npExtractAsync(Pointer<Char> path, Pointer<Uint8> data, int dataSize, int maxColors, int maxDimension, int requestId, Pointer<NativeFunction<NPCallback>> callback);
+external int npExtractAsync(Pointer<Char> path, Pointer<Uint8> data, int dataSize, int maxColors, int maxHeight, int requestId, Pointer<NativeFunction<NPCallback>> callback);
 
 @Native<Void Function(Pointer<NPResult>)>(symbol: 'np_result_free')
 external void npResultFree(Pointer<NPResult> result);

@@ -62,8 +62,9 @@ class PaletteData {
 
 abstract final class NamidaPalette {
   /// Decodes one picture and reduces it to at most [maxColors] colors with the
-  /// median-cut quantizer Android's Palette uses, sampling the picture on a
-  /// grid whose longest side is [maxDimension] pixels.
+  /// median-cut quantizer Android's Palette uses. The picture is box-averaged
+  /// onto a grid at most [maxHeight] rows tall, its width following the aspect
+  /// ratio, so every source pixel weighs in on the histogram.
   ///
   /// The picture comes from [bytes] when given, otherwise from [path]. Every
   /// still image format the bundled libavcodec carries is accepted; the
@@ -71,14 +72,14 @@ abstract final class NamidaPalette {
   ///
   /// This blocks the calling isolate for the duration of the decode; prefer
   /// [extractAsync], which never touches an isolate.
-  static PaletteData extract({String? path, Uint8List? bytes, int maxColors = 16, int maxDimension = 240}) {
+  static PaletteData extract({String? path, Uint8List? bytes, int maxColors = 16, int maxHeight = 240}) {
     assert(path != null || bytes != null, 'a path or bytes must be provided');
     final pathPtr = path == null ? nullptr : path.toNativeUtf8().cast<Char>();
     final dataPtr = bytes == null || bytes.isEmpty ? nullptr : calloc<Uint8>(bytes.length);
     if (dataPtr != nullptr) dataPtr.asTypedList(bytes!.length).setAll(0, bytes);
     Pointer<bindings.NPResult> resultPtr = nullptr;
     try {
-      resultPtr = bindings.npExtract(pathPtr, dataPtr, dataPtr == nullptr ? 0 : bytes!.length, maxColors, maxDimension);
+      resultPtr = bindings.npExtract(pathPtr, dataPtr, dataPtr == nullptr ? 0 : bytes!.length, maxColors, maxHeight);
       return _read(resultPtr);
     } finally {
       if (resultPtr != nullptr) bindings.npResultFree(resultPtr);
@@ -90,7 +91,7 @@ abstract final class NamidaPalette {
   /// [extract] on a native thread of its own: nothing runs on a Dart isolate
   /// but the completion, and [bytes] is read in place rather than copied
   /// through an isolate message.
-  static Future<PaletteData> extractAsync({String? path, Uint8List? bytes, int maxColors = 16, int maxDimension = 240}) {
+  static Future<PaletteData> extractAsync({String? path, Uint8List? bytes, int maxColors = 16, int maxHeight = 240}) {
     assert(path != null || bytes != null, 'a path or bytes must be provided');
     final listener = _listener ??= NativeCallable<bindings.NPCallback>.listener(_onResult)..keepIsolateAlive = false;
     final requestId = ++_lastRequestId;
@@ -101,8 +102,8 @@ abstract final class NamidaPalette {
     final int status;
     try {
       status = bytes != null && bytes.isNotEmpty
-          ? bindings.npExtractAsync(pathPtr, bytes.address, bytes.length, maxColors, maxDimension, requestId, listener.nativeFunction)
-          : bindings.npExtractAsync(pathPtr, nullptr, 0, maxColors, maxDimension, requestId, listener.nativeFunction);
+          ? bindings.npExtractAsync(pathPtr, bytes.address, bytes.length, maxColors, maxHeight, requestId, listener.nativeFunction)
+          : bindings.npExtractAsync(pathPtr, nullptr, 0, maxColors, maxHeight, requestId, listener.nativeFunction);
     } finally {
       if (pathPtr != nullptr) calloc.free(pathPtr);
     }

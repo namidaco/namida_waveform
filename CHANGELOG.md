@@ -1,3 +1,10 @@
+## 2.0.2
+
+- `NamidaPalette`: every source pixel is box-averaged into its grid cell
+  instead of one pixel per cell being picked, and the grid is capped by height
+  (`maxHeight`, was `maxDimension` on the longest side), so populations match a
+  filtered downscale of the whole picture.
+
 ## 2.0.0
 
 - `NamidaPalette`: cover art palette extraction in the same library. Decodes

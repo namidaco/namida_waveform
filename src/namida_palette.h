@@ -45,8 +45,9 @@ typedef struct {
 } NPResult;
 
 /// Decodes one picture and reduces it to at most `max_colors` colors with the
-/// median-cut quantizer Android's Palette uses, sampling the picture on a grid
-/// whose longest side is `max_dimension` pixels.
+/// median-cut quantizer Android's Palette uses. The picture is box-averaged
+/// onto a grid at most `max_height` rows tall, its width following the aspect
+/// ratio, so every source pixel weighs in on the histogram.
 ///
 /// The picture comes from `data` when it is non-NULL, otherwise from `path`.
 /// Every format libavcodec was built with is accepted; the container is
@@ -55,7 +56,7 @@ typedef struct {
 /// Blocks the calling thread. Returns NULL only when the result struct itself
 /// could not be allocated.
 NP_EXPORT NPResult* np_extract(const char* path, const uint8_t* data, int64_t data_size, int32_t max_colors,
-                               int32_t max_dimension);
+                               int32_t max_height);
 
 /// Receives the result of `np_extract_async` on the worker thread. The result
 /// is owned by the receiver, which frees it with `np_result_free`; it is NULL
@@ -68,7 +69,7 @@ typedef void (*np_callback)(int64_t request_id, NPResult* result);
 /// Returns `NP_OK` once the thread is running, in which case `callback` is
 /// invoked exactly once, or an `NP_ERR_*` code when nothing was started.
 NP_EXPORT int32_t np_extract_async(const char* path, const uint8_t* data, int64_t data_size, int32_t max_colors,
-                                   int32_t max_dimension, int64_t request_id, np_callback callback);
+                                   int32_t max_height, int64_t request_id, np_callback callback);
 
 /// Releases a result returned by `np_extract` or handed to a callback. Safe to
 /// call with NULL.
