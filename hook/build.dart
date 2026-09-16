@@ -1,5 +1,6 @@
 // ignore_for_file: avoid_print
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
@@ -330,20 +331,29 @@ File? _locateFFmpegKitAar(BuildInput input, BuildOutputBuilder output) {
     );
   }
 
-  final pubCache = _pubCacheDirectory();
-  if (pubCache == null) return null;
-
-  final gitDirectory = Directory('${pubCache.path}/git');
-  if (!gitDirectory.existsSync()) return null;
-
   final found = <File>[];
-  for (final entity in gitDirectory.listSync()) {
-    if (entity is! Directory) continue;
-    if (!entity.uri.pathSegments.any((s) => s.startsWith('ffmpeg-kit'))) continue;
-    final repository = Directory('${entity.path}/flutter/flutter/android/repo/com/local/ffmpeg-kit');
-    if (!repository.existsSync()) continue;
+  void collect(Directory repository) {
+    if (!repository.existsSync()) return;
     for (final candidate in repository.listSync(recursive: true)) {
       if (candidate is File && candidate.path.endsWith('.aar')) found.add(candidate);
+    }
+  }
+
+  // The resolved package is the one the app actually links against, and the
+  // package config is always handed to the hook, unlike the environment, which
+  // is filtered and may lack the variables locating the pub cache.
+  final packageRoot = _resolvedPackageRoot('ffmpeg_kit_flutter');
+  if (packageRoot != null) collect(Directory('${packageRoot.path}/android/repo/com/local/ffmpeg-kit'));
+
+  if (found.isEmpty) {
+    final pubCache = _pubCacheDirectory();
+    final gitDirectory = pubCache == null ? null : Directory('${pubCache.path}/git');
+    if (gitDirectory != null && gitDirectory.existsSync()) {
+      for (final entity in gitDirectory.listSync()) {
+        if (entity is! Directory) continue;
+        if (!entity.uri.pathSegments.any((s) => s.startsWith('ffmpeg-kit'))) continue;
+        collect(Directory('${entity.path}/flutter/flutter/android/repo/com/local/ffmpeg-kit'));
+      }
     }
   }
   if (found.isEmpty) return null;
@@ -356,6 +366,23 @@ File? _locateFFmpegKitAar(BuildInput input, BuildOutputBuilder output) {
     return b.path.compareTo(a.path);
   });
   return found.first;
+}
+
+/// Root of [package] as resolved in the package config this hook runs with.
+Directory? _resolvedPackageRoot(String package) {
+  final packageConfig = Platform.packageConfig;
+  if (packageConfig == null) return null;
+  final file = File.fromUri(Uri.parse(packageConfig));
+  if (!file.existsSync()) return null;
+  final json = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+  for (final entry in json['packages'] as List<Object?>) {
+    final map = entry as Map<String, Object?>;
+    if (map['name'] != package) continue;
+    final root = file.uri.resolve(map['rootUri'] as String);
+    final directory = Directory.fromUri(root);
+    return directory.existsSync() ? directory : null;
+  }
+  return null;
 }
 
 Directory? _pubCacheDirectory() {

@@ -1,6 +1,6 @@
 name: namida_waveform
 description: "Fast cross-platform audio waveform and cover art palette extraction for Namida, using libav* through Dart FFI and native assets."
-version: 2.0.0
+version: 2.0.1
 homepage: https://github.com/namidaco/namida_waveform
 repository: https://github.com/namidaco/namida_waveform
 publish_to: none
