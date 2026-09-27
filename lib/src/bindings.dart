@@ -1,6 +1,6 @@
-// Hand-written bindings for `src/namida_waveform.h` and `src/namida_palette.h`.
+// Hand-written bindings for `src/namida_waveform.h`, `src/namida_spectrum.h` and `src/namida_palette.h`.
 //
-// The surface is a handful of functions and two structs, so these are maintained directly
+// The surface is a handful of functions and three structs, so these are maintained directly
 // rather than regenerated with ffigen. Field order here must match the C struct
 // exactly; Dart FFI derives padding from the target ABI.
 @DefaultAsset('package:namida_waveform/namida_waveform_bindings_generated.dart')
@@ -35,6 +35,39 @@ external void nwResultFree(Pointer<NWResult> result);
 
 @Native<Int32 Function()>(symbol: 'nw_version')
 external int nwVersion();
+
+// -- namida_spectrum.h -------------------------------------------------------
+
+final class NSResult extends Struct {
+  external Pointer<Uint8> data;
+
+  @Int32()
+  external int frameCount;
+
+  @Int32()
+  external int bandCount;
+
+  @Int32()
+  external int framesPerSecond;
+
+  @Int32()
+  external int error;
+
+  @Int64()
+  external int durationMs;
+
+  @Int32()
+  external int sampleRate;
+}
+
+@Native<Pointer<NSResult> Function(Pointer<Char>, Int32, Int32)>(symbol: 'ns_extract')
+external Pointer<NSResult> nsExtract(Pointer<Char> path, int framesPerSecond, int bandCount);
+
+@Native<Void Function(Pointer<NSResult>)>(symbol: 'ns_result_free')
+external void nsResultFree(Pointer<NSResult> result);
+
+@Native<Int32 Function()>(symbol: 'ns_version')
+external int nsVersion();
 
 // -- namida_palette.h --------------------------------------------------------
 

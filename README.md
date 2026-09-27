@@ -20,6 +20,19 @@ source samples, summed across every channel. Buckets are cut on sample positions
 rather than decoder frame boundaries, so the requested rate is honoured exactly
 and the same audio produces the same number of values in every container.
 
+## Spectrum
+
+```dart
+final data = NamidaSpectrum.extract(path, framesPerSecond: 30, bandCount: 16);
+final row = data.rows.sublist(frame * data.stride, (frame + 1) * data.stride);
+```
+
+Rows of `bandCount + 1` bytes: the level of every log spaced band between 40Hz
+and 16kHz, low to high, then how hard a beat lands on that frame. Frame `i` is
+centered on `i / framesPerSecond` seconds. Levels span 54dB below the loudest
+band of the track, so a quiet recording moves as much as a loud one. It is a
+decode pass of its own, extracting a waveform costs nothing extra.
+
 ## Palettes
 
 ```dart

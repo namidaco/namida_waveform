@@ -1,3 +1,13 @@
+## 2.1.0
+
+- `NamidaSpectrum`: frequency band levels and beat strengths at a fixed frame
+  rate, for visualizers. A decode pass of its own, so extracting a waveform
+  costs exactly what it did. The transform is a real one folded into a complex
+  one of half the size, written here rather than taken from libavutil, which
+  the Android headers and the decode-only desktop build do not carry.
+- The waveform and spectrum extractors share one decoder (`nw_decoder`),
+  waveform output is bit-identical.
+
 ## 2.0.2
 
 - `NamidaPalette`: every source pixel is box-averaged into its grid cell
