@@ -1,6 +1,6 @@
-// Hand-written bindings for `src/namida_waveform.h`, `src/namida_spectrum.h`, `src/namida_rhythm.h` and `src/namida_palette.h`.
+// Hand-written bindings for `src/namida_waveform.h`, `src/namida_spectrum.h`, `src/namida_rhythm.h`, `src/namida_lossless.h` and `src/namida_palette.h`.
 //
-// The surface is a handful of functions and four structs, so these are maintained directly
+// The surface is a handful of functions and five structs, so these are maintained directly
 // rather than regenerated with ffigen. Field order here must match the C struct
 // exactly; Dart FFI derives padding from the target ABI.
 @DefaultAsset('package:namida_waveform/namida_waveform_bindings_generated.dart')
@@ -114,6 +114,43 @@ external void nrResultFree(Pointer<NRResult> result);
 
 @Native<Int32 Function()>(symbol: 'nr_version')
 external int nrVersion();
+
+// -- namida_lossless.h -------------------------------------------------------
+
+final class NLResult extends Struct {
+  @Float()
+  external double cutoffHz;
+
+  @Float()
+  external double cutoffDropDb;
+
+  @Int32()
+  external int lossless;
+
+  @Int32()
+  external int sampleRate;
+
+  @Int32()
+  external int storedBits;
+
+  @Int32()
+  external int usedBits;
+
+  @Int32()
+  external int error;
+
+  @Int64()
+  external int durationMs;
+}
+
+@Native<Pointer<NLResult> Function(Pointer<Char>)>(symbol: 'nl_check')
+external Pointer<NLResult> nlCheck(Pointer<Char> path);
+
+@Native<Void Function(Pointer<NLResult>)>(symbol: 'nl_result_free')
+external void nlResultFree(Pointer<NLResult> result);
+
+@Native<Int32 Function()>(symbol: 'nl_version')
+external int nlVersion();
 
 // -- namida_palette.h --------------------------------------------------------
 

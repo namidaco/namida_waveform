@@ -1,3 +1,12 @@
+## 2.3.0
+
+- `NamidaLossless`: measures what a lossless file built from a lossy, lower
+  rate or lower depth source gives away, from slices spread over the track:
+  the lowpass edge of a lossy encoder, an empty band over the source's rate,
+  and sample bits that never carry anything.
+- The decoder can seek (`nw_decoder_seek`), the lossless check shares the FFT
+  and downmix of the other extractors.
+
 ## 2.2.0
 
 - `NamidaRhythm`: tempo, beat grid, key, audible range and fade out start of

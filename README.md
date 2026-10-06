@@ -52,6 +52,23 @@ profiles. `audibleStartMS`/`audibleEndMS` mark where the audio rises above and
 falls below silence, and `fadeOutStartMS` where the track settles into its fade
 out or quiet outro. Blocking, call it from a worker isolate.
 
+## Lossless check
+
+```dart
+final check = NamidaLossless.check(path);
+if (check.isLossless && check.cutoffDropDB > 25 && check.cutoffHz < 20500) {
+  // a lossy encoder's lowpass, most likely an upscaled mp3/aac
+}
+```
+
+Only files whose codec is lossless are read, sixteen 3 second slices spread
+over the track. `cutoffHz` is the steepest edge of their average spectrum over
+8kHz that the spectrum never climbs back from, and `cutoffDropDB` how deep it
+falls: tens of decibels at a lossy encoder's lowpass or a resampler's, a few
+where music rolls off on its own. `usedBits` under `storedBits` means the
+samples were padded, a 16 bit source stored as 24 bit. Blocking, call it from a
+worker isolate.
+
 ## Palettes
 
 ```dart

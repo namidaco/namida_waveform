@@ -103,6 +103,20 @@ int nw_decoder_next(NWDecoder* decoder) {
   }
 }
 
+int nw_decoder_seek(NWDecoder* decoder, int64_t ms) {
+  const AVStream* stream = decoder->fmt_ctx->streams[decoder->stream_index];
+  int64_t timestamp = av_rescale_q(ms, (AVRational){1, 1000}, stream->time_base);
+  if (stream->start_time != AV_NOPTS_VALUE) timestamp += stream->start_time;
+  if (av_seek_frame(decoder->fmt_ctx, decoder->stream_index, timestamp, AVSEEK_FLAG_BACKWARD) < 0) return 0;
+  avcodec_flush_buffers(decoder->dec_ctx);
+  if (decoder->pending) av_packet_unref(decoder->packet);
+  decoder->pending = 0;
+  decoder->draining = 0;
+  decoder->receiving = 0;
+  decoder->received = 0;
+  return 1;
+}
+
 void nw_decoder_close(NWDecoder* decoder) {
   if (decoder->packet != NULL) av_packet_free(&decoder->packet);
   if (decoder->frame != NULL) av_frame_free(&decoder->frame);

@@ -39,6 +39,10 @@ int32_t nw_decoder_open(NWDecoder* decoder, const char* path);
 /// has ended.
 int nw_decoder_next(NWDecoder* decoder);
 
+/// Moves to the keyframe at or before `ms`, the next frames start there.
+/// Returns 0 when the input can't seek.
+int nw_decoder_seek(NWDecoder* decoder, int64_t ms);
+
 void nw_decoder_close(NWDecoder* decoder);
 
 /// Averages every channel of `frame` into `frame->nb_samples` mono samples at
