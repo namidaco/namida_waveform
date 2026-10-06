@@ -33,6 +33,25 @@ centered on `i / framesPerSecond` seconds. Levels span 54dB below the loudest
 band of the track, so a quiet recording moves as much as a loud one. It is a
 decode pass of its own, extracting a waveform costs nothing extra.
 
+## Rhythm
+
+```dart
+final data = NamidaRhythm.analyze(path, bpmHint: tagBpm);
+print(data.bpm); // 128.002
+print(data.beatOffsetMS); // a beat of the grid, within the first period
+print(data.key); // 0..11 major C..B, 12..23 minor C..B, -1 unknown
+```
+
+Tempo comes from the autocorrelation of the spectral flux, weighted towards
+120 BPM to settle between a tempo and its half or double unless `bpmHint` says
+otherwise. The beat grid is then fitted over the whole track by folding the
+kick-weighted onsets onto one beat, so its offset still holds at the end of the
+track, and `beatConfidence` drops when parts of the track drift off it. The key
+is the best correlation of the tuning-corrected pitch classes with Temperley's
+profiles. `audibleStartMS`/`audibleEndMS` mark where the audio rises above and
+falls below silence, and `fadeOutStartMS` where the track settles into its fade
+out or quiet outro. Blocking, call it from a worker isolate.
+
 ## Palettes
 
 ```dart

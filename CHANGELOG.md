@@ -1,3 +1,13 @@
+## 2.2.0
+
+- `NamidaRhythm`: tempo, beat grid, key, audible range and fade out start of
+  a track, in a decode pass of its own. The grid is fitted over the whole track, so its
+  offset holds to a few milliseconds at the far end of it, and a confidence
+  tells steady tracks from drifting ones. An optional tempo hint, such as a
+  tag, settles between a tempo and its half or double.
+- The spectrum and rhythm extractors share one real FFT (`nw_fft`) and one
+  downmix (`nw_decoder_downmix`), spectrum output is unchanged.
+
 ## 2.1.0
 
 - `NamidaSpectrum`: frequency band levels and beat strengths at a fixed frame

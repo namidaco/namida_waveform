@@ -109,3 +109,43 @@ void nw_decoder_close(NWDecoder* decoder) {
   if (decoder->dec_ctx != NULL) avcodec_free_context(&decoder->dec_ctx);
   if (decoder->fmt_ctx != NULL) avformat_close_input(&decoder->fmt_ctx);
 }
+
+/// Averages every channel of `frame` into mono samples at `dst`.
+#define NW_DOWNMIX(TYPE, BIAS, SCALE)                                             do {                                                                              const float gain = (float)((SCALE) / channels);                                 if (planar) {                                                                     const TYPE* p = (const TYPE*)frame->extended_data[0];                           for (int i = 0; i < n; i++) dst[i] = (float)(p[i] - (BIAS));                    for (int ch = 1; ch < channels; ch++) {                                           p = (const TYPE*)frame->extended_data[ch];                                      for (int i = 0; i < n; i++) dst[i] += (float)(p[i] - (BIAS));                 }                                                                               for (int i = 0; i < n; i++) dst[i] *= gain;                                   } else {                                                                          const TYPE* p = (const TYPE*)frame->extended_data[0];                           for (int i = 0; i < n; i++) {                                                     float mixed = 0.0f;                                                             for (int ch = 0; ch < channels; ch++) mixed += (float)(p[ch] - (BIAS));         dst[i] = mixed * gain;                                                          p += channels;                                                                }                                                                             }                                                                             } while (0)
+
+int32_t nw_decoder_downmix(const AVFrame* frame, float* dst) {
+  const enum AVSampleFormat format = (enum AVSampleFormat)frame->format;
+  const int planar = av_sample_fmt_is_planar(format);
+  const int n = frame->nb_samples;
+  const int channels = frame->ch_layout.nb_channels > 0 ? frame->ch_layout.nb_channels : 1;
+
+  switch (format) {
+    case AV_SAMPLE_FMT_U8:
+    case AV_SAMPLE_FMT_U8P:
+      NW_DOWNMIX(uint8_t, 128, 1.0 / 128.0);
+      break;
+    case AV_SAMPLE_FMT_S16:
+    case AV_SAMPLE_FMT_S16P:
+      NW_DOWNMIX(int16_t, 0, 1.0 / 32768.0);
+      break;
+    case AV_SAMPLE_FMT_S32:
+    case AV_SAMPLE_FMT_S32P:
+      NW_DOWNMIX(int32_t, 0, 1.0 / 2147483648.0);
+      break;
+    case AV_SAMPLE_FMT_S64:
+    case AV_SAMPLE_FMT_S64P:
+      NW_DOWNMIX(int64_t, 0, 1.0 / 9223372036854775808.0);
+      break;
+    case AV_SAMPLE_FMT_FLT:
+    case AV_SAMPLE_FMT_FLTP:
+      NW_DOWNMIX(float, 0, 1.0);
+      break;
+    case AV_SAMPLE_FMT_DBL:
+    case AV_SAMPLE_FMT_DBLP:
+      NW_DOWNMIX(double, 0, 1.0);
+      break;
+    default:
+      return NW_ERR_UNSUPPORTED_FORMAT;
+  }
+  return NW_OK;
+}

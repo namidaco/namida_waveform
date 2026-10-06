@@ -98,7 +98,10 @@ void main(List<String> args) async {
     final builder = CBuilder.library(
       name: '${packageName}_native',
       assetName: assetName,
-      sources: ['src/nw_decoder.c', 'src/namida_waveform.c', 'src/namida_spectrum.c', 'src/namida_palette.c'],
+      sources: [
+        'src/nw_decoder.c', 'src/nw_fft.c', 'src/nr_analyzer.c', //
+        'src/namida_waveform.c', 'src/namida_spectrum.c', 'src/namida_rhythm.c', 'src/namida_palette.c', //
+      ],
       includes: includes,
       libraries: libraries,
       libraryDirectories: libraryDirectories,

@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "nw_decoder.h"
+#include "nw_fft.h"
 
 #define NS_VERSION 1
 
@@ -60,16 +61,7 @@ typedef struct {
   int half;
 
   float* window;
-  int* reversed;
-  /// Twiddles of every stage back to back, the stage spanning `s` samples
-  /// sits at `[s / 2, s)`, so each stage walks its own contiguous run.
-  float* stage_cos;
-  float* stage_sin;
-  /// Unfolds the half size transform back into the real one.
-  float* turn_cos;
-  float* turn_sin;
-  float* re;
-  float* im;
+  NWFft fft;
 
   /// `band_count + 1` bins, band `b` sums `[edges[b], edges[b + 1])`.
   int* edges;
@@ -91,13 +83,7 @@ typedef struct {
 
 static void ns_state_free(NSState* s) {
   free(s->window);
-  free(s->reversed);
-  free(s->stage_cos);
-  free(s->stage_sin);
-  free(s->turn_cos);
-  free(s->turn_sin);
-  free(s->re);
-  free(s->im);
+  nw_fft_free(&s->fft);
   free(s->edges);
   free(s->beat_weights);
   free(s->samples);
@@ -113,49 +99,14 @@ static int ns_state_prepare(NSState* s, int sample_rate) {
   s->half = half;
 
   s->window = (float*)malloc((size_t)fft_size * sizeof(float));
-  s->reversed = (int*)malloc((size_t)half * sizeof(int));
-  s->stage_cos = (float*)malloc((size_t)half * sizeof(float));
-  s->stage_sin = (float*)malloc((size_t)half * sizeof(float));
-  s->turn_cos = (float*)malloc((size_t)half * sizeof(float));
-  s->turn_sin = (float*)malloc((size_t)half * sizeof(float));
-  s->re = (float*)malloc((size_t)half * sizeof(float));
-  s->im = (float*)malloc((size_t)half * sizeof(float));
   s->edges = (int*)malloc((size_t)(s->band_count + 1) * sizeof(int));
   s->beat_weights = (float*)malloc((size_t)s->band_count * sizeof(float));
-  if (s->window == NULL || s->reversed == NULL || s->stage_cos == NULL || s->stage_sin == NULL || s->turn_cos == NULL ||
-      s->turn_sin == NULL || s->re == NULL || s->im == NULL || s->edges == NULL || s->beat_weights == NULL) {
+  if (!nw_fft_init(&s->fft, fft_size) || s->window == NULL || s->edges == NULL || s->beat_weights == NULL) {
     return 0;
   }
 
   for (int i = 0; i < fft_size; i++) {
     s->window[i] = (float)(0.5 - 0.5 * cos(2.0 * NS_PI * i / fft_size));
-  }
-
-  int bits = 0;
-  while ((1 << bits) < half) bits++;
-  for (int i = 0; i < half; i++) {
-    int reversed = 0;
-    for (int b = 0; b < bits; b++) {
-      if (i & (1 << b)) reversed |= 1 << (bits - 1 - b);
-    }
-    s->reversed[i] = reversed;
-  }
-
-  s->stage_cos[0] = 1.0f;
-  s->stage_sin[0] = 0.0f;
-  for (int span = 2; span <= half; span <<= 1) {
-    const int reach = span / 2;
-    for (int j = 0; j < reach; j++) {
-      const double angle = -2.0 * NS_PI * j / span;
-      s->stage_cos[reach + j] = (float)cos(angle);
-      s->stage_sin[reach + j] = (float)sin(angle);
-    }
-  }
-
-  for (int k = 0; k < half; k++) {
-    const double angle = -2.0 * NS_PI * k / fft_size;
-    s->turn_cos[k] = (float)cos(angle);
-    s->turn_sin[k] = (float)sin(angle);
   }
 
   // A full scale sine lands on `fft_size / 4` once the window halved it.
@@ -220,66 +171,11 @@ static int ns_rows_reserve(NSState* s, int32_t needed) {
   return 1;
 }
 
-/// Averages every channel of `frame` into mono samples at `dst`.
-#define NS_DOWNMIX(TYPE, BIAS, SCALE)                                           \
-  do {                                                                          \
-    const float gain = (float)((SCALE) / channels);                             \
-    if (planar) {                                                               \
-      const TYPE* p = (const TYPE*)frame->extended_data[0];                     \
-      for (int i = 0; i < n; i++) dst[i] = (float)(p[i] - (BIAS));              \
-      for (int ch = 1; ch < channels; ch++) {                                   \
-        p = (const TYPE*)frame->extended_data[ch];                              \
-        for (int i = 0; i < n; i++) dst[i] += (float)(p[i] - (BIAS));           \
-      }                                                                         \
-      for (int i = 0; i < n; i++) dst[i] *= gain;                               \
-    } else {                                                                    \
-      const TYPE* p = (const TYPE*)frame->extended_data[0];                     \
-      for (int i = 0; i < n; i++) {                                             \
-        float mixed = 0.0f;                                                     \
-        for (int ch = 0; ch < channels; ch++) mixed += (float)(p[ch] - (BIAS)); \
-        dst[i] = mixed * gain;                                                  \
-        p += channels;                                                          \
-      }                                                                         \
-    }                                                                           \
-  } while (0)
-
 static int32_t ns_append(NSState* s, const AVFrame* frame) {
-  const enum AVSampleFormat format = (enum AVSampleFormat)frame->format;
-  const int planar = av_sample_fmt_is_planar(format);
   const int n = frame->nb_samples;
-  const int channels = frame->ch_layout.nb_channels > 0 ? frame->ch_layout.nb_channels : 1;
-
   if (!ns_samples_reserve(s, s->count + n)) return NW_ERR_ALLOC;
-  float* dst = s->samples + s->count;
-
-  switch (format) {
-    case AV_SAMPLE_FMT_U8:
-    case AV_SAMPLE_FMT_U8P:
-      NS_DOWNMIX(uint8_t, 128, 1.0 / 128.0);
-      break;
-    case AV_SAMPLE_FMT_S16:
-    case AV_SAMPLE_FMT_S16P:
-      NS_DOWNMIX(int16_t, 0, 1.0 / 32768.0);
-      break;
-    case AV_SAMPLE_FMT_S32:
-    case AV_SAMPLE_FMT_S32P:
-      NS_DOWNMIX(int32_t, 0, 1.0 / 2147483648.0);
-      break;
-    case AV_SAMPLE_FMT_S64:
-    case AV_SAMPLE_FMT_S64P:
-      NS_DOWNMIX(int64_t, 0, 1.0 / 9223372036854775808.0);
-      break;
-    case AV_SAMPLE_FMT_FLT:
-    case AV_SAMPLE_FMT_FLTP:
-      NS_DOWNMIX(float, 0, 1.0);
-      break;
-    case AV_SAMPLE_FMT_DBL:
-    case AV_SAMPLE_FMT_DBLP:
-      NS_DOWNMIX(double, 0, 1.0);
-      break;
-    default:
-      return NW_ERR_UNSUPPORTED_FORMAT;
-  }
+  const int32_t error = nw_decoder_downmix(frame, s->samples + s->count);
+  if (error != NW_OK) return error;
 
   s->count += n;
   s->total += n;
@@ -288,55 +184,10 @@ static int32_t ns_append(NSState* s, const AVFrame* frame) {
 
 /// Transforms the `fft_size` samples at `x` and writes the level of every
 /// band to `row`.
-///
-/// The real transform is folded into a complex one of half the size: even
-/// samples go to the real part, odd ones to the imaginary part, and the two
-/// are told apart again afterwards, only for the bins a band actually reads.
 static void ns_transform(NSState* s, const float* x, uint8_t* row) {
-  const int half = s->half;
-  float* re = s->re;
-  float* im = s->im;
-  const float* window = s->window;
-  const int* reversed = s->reversed;
+  NWFft* fft = &s->fft;
+  nw_fft_forward(fft, x, s->window);
 
-  for (int i = 0; i < half; i++) {
-    const int target = reversed[i];
-    re[target] = x[2 * i] * window[2 * i];
-    im[target] = x[2 * i + 1] * window[2 * i + 1];
-  }
-
-  // -- the first stage turns nothing, so it needs no multiply
-  for (int i = 0; i + 1 < half; i += 2) {
-    const float ar = re[i], ai = im[i];
-    const float br = re[i + 1], bi = im[i + 1];
-    re[i] = ar + br;
-    im[i] = ai + bi;
-    re[i + 1] = ar - br;
-    im[i + 1] = ai - bi;
-  }
-
-  for (int span = 4; span <= half; span <<= 1) {
-    const int reach = span / 2;
-    const float* wr = s->stage_cos + reach;
-    const float* wi = s->stage_sin + reach;
-    for (int start = 0; start < half; start += span) {
-      float* ar = re + start;
-      float* ai = im + start;
-      float* br = ar + reach;
-      float* bi = ai + reach;
-      for (int j = 0; j < reach; j++) {
-        const float tr = br[j] * wr[j] - bi[j] * wi[j];
-        const float ti = br[j] * wi[j] + bi[j] * wr[j];
-        br[j] = ar[j] - tr;
-        bi[j] = ai[j] - ti;
-        ar[j] += tr;
-        ai[j] += ti;
-      }
-    }
-  }
-
-  const float* turn_cos = s->turn_cos;
-  const float* turn_sin = s->turn_sin;
   const double power_scale = s->power_scale;
   const int band_count = s->band_count;
 
@@ -344,19 +195,7 @@ static void ns_transform(NSState* s, const float* x, uint8_t* row) {
     const int from = s->edges[b];
     const int to = s->edges[b + 1];
     float power = 0.0f;
-    for (int k = from; k < to; k++) {
-      const int mirror = half - k;
-      const float ar = re[k], ai = im[k];
-      const float br = re[mirror], bi = -im[mirror];
-      const float even_r = 0.5f * (ar + br);
-      const float even_i = 0.5f * (ai + bi);
-      const float odd_r = 0.5f * (ai - bi);
-      const float odd_i = -0.5f * (ar - br);
-      const float c = turn_cos[k], sn = turn_sin[k];
-      const float xr = even_r + c * odd_r - sn * odd_i;
-      const float xi = even_i + c * odd_i + sn * odd_r;
-      power += xr * xr + xi * xi;
-    }
+    for (int k = from; k < to; k++) power += nw_fft_bin_power(fft, k);
     const double db = 10.0 * log10((double)power * power_scale + 1e-20);
     const double level = (db - NS_FLOOR_DB) * (255.0 / -NS_FLOOR_DB);
     row[b] = level <= 0.0 ? 0 : (level >= 255.0 ? 255 : (uint8_t)(level + 0.5));

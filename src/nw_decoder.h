@@ -41,6 +41,10 @@ int nw_decoder_next(NWDecoder* decoder);
 
 void nw_decoder_close(NWDecoder* decoder);
 
+/// Averages every channel of `frame` into `frame->nb_samples` mono samples at
+/// `dst`, in the `-1..1` domain. Returns `NW_OK` or `NW_ERR_UNSUPPORTED_FORMAT`.
+int32_t nw_decoder_downmix(const AVFrame* frame, float* dst);
+
 #ifdef __cplusplus
 }
 #endif
