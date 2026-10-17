@@ -19,7 +19,8 @@ import 'package:native_toolchain_c/native_toolchain_c.dart';
 // ```
 //
 // Paths resolve against the directory of the `pubspec.yaml` declaring them, and
-// are registered as build dependencies so a change re-runs the hook.
+// the files used from them are registered as build dependencies so a change
+// re-runs the hook.
 
 /// A directory holding an already built `namida_waveform_native` library for the
 /// target, looked up as `<os>/<arch>/<library>`, `<os>/<library>` or
@@ -51,7 +52,7 @@ void main(List<String> args) async {
 
     final prebuilt = _findPrebuilt(input, output, targetOS: targetOS, arch: arch);
     if (prebuilt != null) {
-      print('namida_waveform: bundling prebuilt ${prebuilt.path}');
+      print('namida_waveform: bundling prebuilt as ${prebuilt.path}');
       output.assets.code.add(
         CodeAsset(
           package: packageName,
@@ -132,31 +133,37 @@ String _libraryFileName(OS targetOS) => switch (targetOS) {
       _ => 'libnamida_waveform_native.so',
     };
 
-/// Resolves a user-define holding a path, and registers it so the build cache
-/// notices when it changes.
-String? _definedPath(BuildInput input, BuildOutputBuilder output, String key) {
+/// Resolves a user-define holding a path. Callers register the files they use:
+/// flutter treats a directory dependency as a missing input and reruns the
+/// hooks every build.
+String? _definedPath(BuildInput input, String key) {
   final uri = input.userDefines.path(key);
-  if (uri == null) return null;
-  output.dependencies.add(uri);
-  return uri.toFilePath();
+  return uri?.toFilePath();
 }
 
 /// Looks for an already built library for this target, so release builds can
 /// ship one linked against a known FFmpeg instead of whatever the build machine
 /// happens to have installed.
 File? _findPrebuilt(BuildInput input, BuildOutputBuilder output, {required OS targetOS, required Architecture arch}) {
-  final directory = _definedPath(input, output, _definePrebuiltDir);
+  final directory = _definedPath(input, _definePrebuiltDir);
   if (directory == null) return null;
 
   final fileName = _libraryFileName(targetOS);
-  for (final candidate in [
-    '$directory/${targetOS.name}/${arch.name}/$fileName',
-    '$directory/${targetOS.name}/$fileName',
-    '$directory/$fileName',
-  ]) {
-    final file = File(candidate);
-    if (file.existsSync()) return file.absolute;
+  final candidates = [
+    File('$directory/${targetOS.name}/${arch.name}/$fileName').absolute,
+    File('$directory/${targetOS.name}/$fileName').absolute,
+    File('$directory/$fileName').absolute,
+  ];
+  for (final file in candidates) {
+    if (file.existsSync()) {
+      output.dependencies.add(file.uri);
+      // -- a copy, since a failed flutter build deletes the previous assets as stale outputs
+      final bundledPath = input.outputDirectory.resolve(fileName).toFilePath();
+      return file.copySync(bundledPath);
+    }
   }
+  // -- so a prebuilt produced later replaces the source build
+  output.dependencies.addAll(candidates.map((e) => e.uri));
   print(
     'namida_waveform: $_definePrebuiltDir is "$directory" but it holds no $fileName for '
     '$targetOS $arch, building from source instead.',
@@ -187,9 +194,14 @@ _FFmpegFlags _desktopFFmpeg(BuildInput input, BuildOutputBuilder output, OS targ
     if (targetOS != OS.windows) 'm',
   ];
 
-  final root = _definedPath(input, output, _defineFFmpegDir);
+  final root = _definedPath(input, _defineFFmpegDir);
   if (root != null) {
     if (Directory(root).existsSync()) {
+      final libDirectory = Directory('$root/lib');
+      if (libDirectory.existsSync()) {
+        final libFiles = libDirectory.listSync().whereType<File>().map((e) => e.absolute.uri);
+        output.dependencies.addAll(libFiles);
+      }
       // A staged install carries .pc files describing the transitive static
       // dependencies (zlib, openssl, pthread); use them when they are there.
       final pkgConfigDirectory = Directory('$root/lib/pkgconfig');
@@ -276,7 +288,7 @@ _FFmpegFlags? _runPkgConfig(List<String> packages, {required bool static, requir
 /// Android links against the FFmpeg that is already inside the APK, so this
 /// package adds no decoder of its own.
 String _prepareFFmpegKitLibs(BuildInput input, BuildOutputBuilder output, String abi) {
-  final aar = _locateFFmpegKitAar(input, output);
+  final aar = _locateFFmpegKitAar(input);
   if (aar == null) {
     throw StateError(
       'namida_waveform: could not find the ffmpeg-kit .aar in the pub cache. Set '
@@ -323,8 +335,8 @@ String _prepareFFmpegKitLibs(BuildInput input, BuildOutputBuilder output, String
   return outputDirectory.path;
 }
 
-File? _locateFFmpegKitAar(BuildInput input, BuildOutputBuilder output) {
-  final override = _definedPath(input, output, _defineFFmpegKitAar);
+File? _locateFFmpegKitAar(BuildInput input) {
+  final override = _definedPath(input, _defineFFmpegKitAar);
   if (override != null) {
     final file = File(override);
     if (file.existsSync()) return file;
