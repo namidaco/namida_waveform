@@ -41,6 +41,11 @@ const _defineFFmpegDir = 'ffmpeg_dir';
 /// pub cache when omitted.
 const _defineFFmpegKitAar = 'ffmpeg_kit_aar';
 
+/// The directory holding ffmpeg-kit's iOS `.xcframework`s, the same FFmpeg the
+/// app embeds through the ffmpeg_kit_flutter pod. Like Android, iOS links
+/// against it instead of carrying a second FFmpeg.
+const _defineFFmpegKitIOSDir = 'ffmpeg_kit_ios_dir';
+
 void main(List<String> args) async {
   await build(args, (input, output) async {
     if (!input.config.buildCodeAssets) return;
@@ -68,6 +73,8 @@ void main(List<String> args) async {
     final libraries = <String>[];
     final libraryDirectories = <String>[];
     final flags = <String>[];
+    // CBuilder's own default, kept for the Apple targets
+    final frameworks = <String>['Foundation'];
 
     switch (targetOS) {
       case OS.android:
@@ -82,6 +89,17 @@ void main(List<String> args) async {
         // armeabi-v7a carries NEON builds under a different soname.
         final suffix = abi == 'armeabi-v7a' ? '_neon' : '';
         libraries.addAll(['avformat$suffix', 'avcodec$suffix', 'avutil$suffix', 'm']);
+
+      case OS.iOS:
+        // ffmpeg-kit's iOS frameworks are FFmpeg n6.0 as well.
+        includes.add('src/ffmpeg/include');
+        const ffmpegFrameworks = ['libavformat', 'libavcodec', 'libavutil'];
+        for (final directory in _iosFFmpegKitFrameworkDirectories(input, output, ffmpegFrameworks)) {
+          flags.addAll(['-F', directory]);
+        }
+        frameworks.addAll(ffmpegFrameworks);
+        // the frameworks sit next to this one in the app's Frameworks folder
+        flags.addAll(['-Wl,-rpath,@executable_path/Frameworks', '-Wl,-rpath,@loader_path/..']);
 
       case OS.linux || OS.macOS || OS.windows:
         final ffmpeg = _desktopFFmpeg(input, output, targetOS);
@@ -107,6 +125,7 @@ void main(List<String> args) async {
       libraries: libraries,
       libraryDirectories: libraryDirectories,
       flags: flags,
+      frameworks: frameworks,
       language: Language.c,
       std: 'c11',
     );
@@ -129,9 +148,40 @@ String? _androidAbi(Architecture arch) => switch (arch) {
 
 String _libraryFileName(OS targetOS) => switch (targetOS) {
       OS.windows => 'namida_waveform_native.dll',
-      OS.macOS => 'libnamida_waveform_native.dylib',
+      OS.macOS || OS.iOS => 'libnamida_waveform_native.dylib',
       _ => 'libnamida_waveform_native.so',
     };
+
+/// The slice of each of [frameworks] (`<name>.xcframework/<slice>/`) matching
+/// the device or simulator sdk being built for.
+List<String> _iosFFmpegKitFrameworkDirectories(BuildInput input, BuildOutputBuilder output, List<String> frameworks) {
+  final root = _definedPath(input, _defineFFmpegKitIOSDir);
+  if (root == null || !Directory(root).existsSync()) {
+    throw StateError(
+      'namida_waveform: building for iOS needs hooks.user_defines.namida_waveform.$_defineFFmpegKitIOSDir '
+      'pointing at the directory holding the iOS ffmpeg-kit xcframeworks (got "$root"), or '
+      '.$_definePrebuiltDir pointing at a directory with a prebuilt library.',
+    );
+  }
+  final isSimulator = input.config.code.iOS.targetSdk == IOSSdk.iPhoneSimulator;
+  final directories = <String>[];
+  for (final name in frameworks) {
+    final xcframework = Directory('$root/$name.xcframework');
+    final slices = xcframework.existsSync() ? xcframework.listSync().whereType<Directory>() : const <Directory>[];
+    final slice = slices.where((e) {
+      final sliceName = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
+      if (!sliceName.startsWith('ios-') || sliceName.contains('maccatalyst')) return false;
+      return sliceName.endsWith('-simulator') == isSimulator;
+    }).firstOrNull;
+    if (slice == null) {
+      throw StateError('namida_waveform: ${xcframework.path} has no ${isSimulator ? 'simulator' : 'device'} slice.');
+    }
+    final binary = File('${slice.path}/$name.framework/$name');
+    if (binary.existsSync()) output.dependencies.add(binary.absolute.uri);
+    directories.add(slice.absolute.path);
+  }
+  return directories;
+}
 
 /// Resolves a user-define holding a path. Callers register the files they use:
 /// flutter treats a directory dependency as a missing input and reruns the
