@@ -29,15 +29,13 @@ import 'package:native_toolchain_c/native_toolchain_c.dart';
 const _definePrebuiltDir = 'prebuilt_dir';
 
 /// Root of an FFmpeg install (`include/` + `lib/`) to build the desktop library
-/// against. Release builds point this at the staged install that
-/// `external/ffmpeg_build` produces, so the library links the same FFmpeg the
-/// bundled `ffmpeg`/`ffprobe` binaries are built from -- statically, when that
-/// prefix only carries `.a` archives -- and resolves nothing on the user's
-/// machine. Without it the build falls back to a system install.
+/// against. Pointed at a static FFmpeg install (a prefix with only `.a`
+/// archives), the library resolves nothing on the user's machine. Without it the
+/// build falls back to a system install.
 const _defineFFmpegDir = 'ffmpeg_dir';
 
-/// The package whose build hook ships FFmpeg (`libffmpegkit`) on Android and
-/// iOS. Its hook hands the library's path to this one as metadata, so both
+/// The package whose build hook ships FFmpeg (`libffmpegkit`) on Android, iOS
+/// and macOS. Its hook hands the library's path to this one as metadata, so both
 /// link the same FFmpeg and this package carries no decoder of its own there.
 const _ffmpegKitPackage = 'ffmpeg_kit_extended_flutter';
 
@@ -84,17 +82,20 @@ void main(List<String> args) async {
         libraryDirectories.add(ffmpegKit.parent.path);
         libraries.addAll(['ffmpegkit', 'm']);
 
-      case OS.iOS:
+      case OS.iOS || OS.macOS:
         includes.add('src/ffmpeg/include');
-        // the binary sits at <dir>/ffmpegkit.framework/ffmpegkit
+        // the binary sits at <dir>/ffmpegkit.framework/ffmpegkit on iOS, and at
+        // <dir>/ffmpegkit.framework/Versions/A/ffmpegkit on macOS
         final ffmpegKit = _ffmpegKitLibrary(input, output);
-        final frameworksDirectory = ffmpegKit.parent.parent.path;
-        flags.addAll(['-F', frameworksDirectory]);
+        final isIOS = targetOS == OS.iOS;
+        final framework = isIOS ? ffmpegKit.parent : ffmpegKit.parent.parent.parent;
+        flags.addAll(['-F', framework.parent.path]);
         frameworks.add('ffmpegkit');
         // the framework sits next to this one in the app's Frameworks folder
-        flags.addAll(['-Wl,-rpath,@executable_path/Frameworks', '-Wl,-rpath,@loader_path/..']);
+        final rpaths = isIOS ? ['@executable_path/Frameworks', '@loader_path/..'] : ['@executable_path/../Frameworks', '@loader_path/../../..'];
+        flags.addAll(rpaths.map((e) => '-Wl,-rpath,$e'));
 
-      case OS.linux || OS.macOS || OS.windows:
+      case OS.linux || OS.windows:
         final ffmpeg = _desktopFFmpeg(input, output, targetOS);
         includes.addAll(ffmpeg.includes);
         libraryDirectories.addAll(ffmpeg.libraryDirectories);
@@ -313,50 +314,11 @@ _FFmpegFlags? _runPkgConfig(List<String> packages, {required bool static, requir
   );
 }
 
-// -- obsolete: ffmpeg-kit (`ffmpeg_kit_flutter`, FFmpeg n6.0) lookups, from when the
-// -- app embedded its libraries. Replaced by [_ffmpegKitLibrary], the library
-// -- ffmpeg_kit_extended_flutter's hook reports.
-//
+// -- obsolete android ffmpeg-kit lookups, see [_ffmpegKitLibrary]
 //
 // /// Overrides the ffmpeg-kit `.aar` the Android build links against. Found in the
 // /// pub cache when omitted.
 // const _defineFFmpegKitAar = 'ffmpeg_kit_aar';
-//
-// /// The directory holding ffmpeg-kit's iOS `.xcframework`s, the same FFmpeg the
-// /// app embeds through the ffmpeg_kit_flutter pod. Like Android, iOS links
-// /// against it instead of carrying a second FFmpeg.
-// const _defineFFmpegKitIOSDir = 'ffmpeg_kit_ios_dir';
-//
-// /// The slice of each of [frameworks] (`<name>.xcframework/<slice>/`) matching
-// /// the device or simulator sdk being built for.
-// List<String> _iosFFmpegKitFrameworkDirectories(BuildInput input, BuildOutputBuilder output, List<String> frameworks) {
-//   final root = _definedPath(input, _defineFFmpegKitIOSDir);
-//   if (root == null || !Directory(root).existsSync()) {
-//     throw StateError(
-//       'namida_waveform: building for iOS needs hooks.user_defines.namida_waveform.$_defineFFmpegKitIOSDir '
-//       'pointing at the directory holding the iOS ffmpeg-kit xcframeworks (got "$root"), or '
-//       '.$_definePrebuiltDir pointing at a directory with a prebuilt library.',
-//     );
-//   }
-//   final isSimulator = input.config.code.iOS.targetSdk == IOSSdk.iPhoneSimulator;
-//   final directories = <String>[];
-//   for (final name in frameworks) {
-//     final xcframework = Directory('$root/$name.xcframework');
-//     final slices = xcframework.existsSync() ? xcframework.listSync().whereType<Directory>() : const <Directory>[];
-//     final slice = slices.where((e) {
-//       final sliceName = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
-//       if (!sliceName.startsWith('ios-') || sliceName.contains('maccatalyst')) return false;
-//       return sliceName.endsWith('-simulator') == isSimulator;
-//     }).firstOrNull;
-//     if (slice == null) {
-//       throw StateError('namida_waveform: ${xcframework.path} has no ${isSimulator ? 'simulator' : 'device'} slice.');
-//     }
-//     final binary = File('${slice.path}/$name.framework/$name');
-//     if (binary.existsSync()) output.dependencies.add(binary.absolute.uri);
-//     directories.add(slice.absolute.path);
-//   }
-//   return directories;
-// }
 //
 // /// Extracts the ffmpeg-kit shared libraries for [abi] out of its `.aar` and
 // /// returns the directory holding them.

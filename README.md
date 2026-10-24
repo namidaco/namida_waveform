@@ -95,7 +95,7 @@ callers that already have a worker.
 
 | Target | FFmpeg |
 | --- | --- |
-| Android / iOS | Links `libffmpegkit`, the FFmpeg `ffmpeg_kit_extended_flutter` already ships with the app, so this package adds no decoder of its own. The plugin's build hook passes the library's path to this hook. Headers of the same FFmpeg release (9.0) are vendored in `src/ffmpeg/include` to match its ABI. |
+| Android / iOS / macOS | Links `libffmpegkit`, the FFmpeg `ffmpeg_kit_extended_flutter` already ships with the app, so this package adds no decoder of its own. The plugin's build hook passes the library's path to this hook. Headers of the same FFmpeg release (9.0) are vendored in `src/ffmpeg/include` to match its ABI. |
 | Linux / Windows | Links a static FFmpeg into the library, since a desktop machine is not guaranteed to have one. |
 
 For a release, build the desktop library with `build_waveform.sh` in namida's

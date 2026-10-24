@@ -1,6 +1,6 @@
 ## 2.4.0
 
-- Android and iOS link `libffmpegkit` from `ffmpeg_kit_extended_flutter`
+- Android, iOS and macOS link `libffmpegkit` from `ffmpeg_kit_extended_flutter`
   (FFmpeg 9.0) instead of ffmpeg-kit's libraries (FFmpeg 6.0). The plugin's
   build hook passes the library's path, so the `ffmpeg_kit_aar` and
   `ffmpeg_kit_ios_dir` user-defines are gone.
