@@ -83,7 +83,7 @@ one `palette_generator` ports, with identical output for the same pixels). JPEG
 decodes at 1/2, 1/4 or 1/8 resolution straight out of the DCT when that still
 covers the grid. Every still image
 format the linked libavcodec carries is accepted -- JPEG, PNG, WebP, GIF, BMP
-and TIFF in the desktop build, more with ffmpeg-kit -- and the container is
+and TIFF in the desktop build, more on Android and iOS -- and the container is
 detected from the bytes, never from the file name.
 
 `extractAsync` runs on a native thread of its own and posts the result back
@@ -95,7 +95,7 @@ callers that already have a worker.
 
 | Target | FFmpeg |
 | --- | --- |
-| Android | Links the FFmpeg `ffmpeg_kit_flutter` already ships inside the APK, so this package adds no decoder of its own. Headers for n6.0 are vendored in `src/ffmpeg/include` to match its ABI. |
+| Android / iOS | Links `libffmpegkit`, the FFmpeg `ffmpeg_kit_extended_flutter` already ships with the app, so this package adds no decoder of its own. The plugin's build hook passes the library's path to this hook. Headers of the same FFmpeg release (9.0) are vendored in `src/ffmpeg/include` to match its ABI. |
 | Linux / Windows | Links a static FFmpeg into the library, since a desktop machine is not guaranteed to have one. |
 
 For a release, build the desktop library with `build_waveform.sh` in namida's
@@ -126,7 +126,6 @@ hooks:
 | --- | --- |
 | `prebuilt_dir` | Bundle an already built library instead of compiling. Looked up as `<os>/<arch>/<library>`, `<os>/<library>`, then `<library>`. |
 | `ffmpeg_dir` | An FFmpeg install (`include/` + `lib/`) to compile against. Links statically when the prefix only carries `.a` archives. |
-| `ffmpeg_kit_aar` | Override the ffmpeg-kit `.aar` the Android build links against. |
 
 Paths resolve against the directory of the `pubspec.yaml` declaring them. Each
 is optional and falls through to the next option when it holds nothing for the

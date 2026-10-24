@@ -1,6 +1,5 @@
 // ignore_for_file: avoid_print
 
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
@@ -37,14 +36,10 @@ const _definePrebuiltDir = 'prebuilt_dir';
 /// machine. Without it the build falls back to a system install.
 const _defineFFmpegDir = 'ffmpeg_dir';
 
-/// Overrides the ffmpeg-kit `.aar` the Android build links against. Found in the
-/// pub cache when omitted.
-const _defineFFmpegKitAar = 'ffmpeg_kit_aar';
-
-/// The directory holding ffmpeg-kit's iOS `.xcframework`s, the same FFmpeg the
-/// app embeds through the ffmpeg_kit_flutter pod. Like Android, iOS links
-/// against it instead of carrying a second FFmpeg.
-const _defineFFmpegKitIOSDir = 'ffmpeg_kit_ios_dir';
+/// The package whose build hook ships FFmpeg (`libffmpegkit`) on Android and
+/// iOS. Its hook hands the library's path to this one as metadata, so both
+/// link the same FFmpeg and this package carries no decoder of its own there.
+const _ffmpegKitPackage = 'ffmpeg_kit_extended_flutter';
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
@@ -82,23 +77,21 @@ void main(List<String> args) async {
         if (abi == null) {
           throw UnsupportedError('namida_waveform: unsupported Android architecture "$arch".');
         }
-        // ffmpeg-kit ships FFmpeg n6.0; the vendored headers are pinned to the
-        // same release so struct layouts match the libraries we link against.
+        // the vendored headers match the FFmpeg release libffmpegkit is built from,
+        // so struct layouts match the library we link against.
         includes.add('src/ffmpeg/include');
-        libraryDirectories.add(_prepareFFmpegKitLibs(input, output, abi));
-        // armeabi-v7a carries NEON builds under a different soname.
-        final suffix = abi == 'armeabi-v7a' ? '_neon' : '';
-        libraries.addAll(['avformat$suffix', 'avcodec$suffix', 'avutil$suffix', 'm']);
+        final ffmpegKit = _ffmpegKitLibrary(input, output);
+        libraryDirectories.add(ffmpegKit.parent.path);
+        libraries.addAll(['ffmpegkit', 'm']);
 
       case OS.iOS:
-        // ffmpeg-kit's iOS frameworks are FFmpeg n6.0 as well.
         includes.add('src/ffmpeg/include');
-        const ffmpegFrameworks = ['libavformat', 'libavcodec', 'libavutil'];
-        for (final directory in _iosFFmpegKitFrameworkDirectories(input, output, ffmpegFrameworks)) {
-          flags.addAll(['-F', directory]);
-        }
-        frameworks.addAll(ffmpegFrameworks);
-        // the frameworks sit next to this one in the app's Frameworks folder
+        // the binary sits at <dir>/ffmpegkit.framework/ffmpegkit
+        final ffmpegKit = _ffmpegKitLibrary(input, output);
+        final frameworksDirectory = ffmpegKit.parent.parent.path;
+        flags.addAll(['-F', frameworksDirectory]);
+        frameworks.add('ffmpegkit');
+        // the framework sits next to this one in the app's Frameworks folder
         flags.addAll(['-Wl,-rpath,@executable_path/Frameworks', '-Wl,-rpath,@loader_path/..']);
 
       case OS.linux || OS.macOS || OS.windows:
@@ -152,35 +145,23 @@ String _libraryFileName(OS targetOS) => switch (targetOS) {
       _ => 'libnamida_waveform_native.so',
     };
 
-/// The slice of each of [frameworks] (`<name>.xcframework/<slice>/`) matching
-/// the device or simulator sdk being built for.
-List<String> _iosFFmpegKitFrameworkDirectories(BuildInput input, BuildOutputBuilder output, List<String> frameworks) {
-  final root = _definedPath(input, _defineFFmpegKitIOSDir);
-  if (root == null || !Directory(root).existsSync()) {
+/// `libffmpegkit` of the target, as the build hook of [_ffmpegKitPackage]
+/// extracted it. On Apple targets it is the binary inside `ffmpegkit.framework`.
+File _ffmpegKitLibrary(BuildInput input, BuildOutputBuilder output) {
+  final path = input.metadata[_ffmpegKitPackage]['library_path'];
+  if (path is! String) {
     throw StateError(
-      'namida_waveform: building for iOS needs hooks.user_defines.namida_waveform.$_defineFFmpegKitIOSDir '
-      'pointing at the directory holding the iOS ffmpeg-kit xcframeworks (got "$root"), or '
-      '.$_definePrebuiltDir pointing at a directory with a prebuilt library.',
+      'namida_waveform: $_ffmpegKitPackage passed no library_path to this hook. It needs a version '
+      'of it whose build hook does (the namida fork), or .$_definePrebuiltDir pointing at a directory '
+      'with a prebuilt library.',
     );
   }
-  final isSimulator = input.config.code.iOS.targetSdk == IOSSdk.iPhoneSimulator;
-  final directories = <String>[];
-  for (final name in frameworks) {
-    final xcframework = Directory('$root/$name.xcframework');
-    final slices = xcframework.existsSync() ? xcframework.listSync().whereType<Directory>() : const <Directory>[];
-    final slice = slices.where((e) {
-      final sliceName = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
-      if (!sliceName.startsWith('ios-') || sliceName.contains('maccatalyst')) return false;
-      return sliceName.endsWith('-simulator') == isSimulator;
-    }).firstOrNull;
-    if (slice == null) {
-      throw StateError('namida_waveform: ${xcframework.path} has no ${isSimulator ? 'simulator' : 'device'} slice.');
-    }
-    final binary = File('${slice.path}/$name.framework/$name');
-    if (binary.existsSync()) output.dependencies.add(binary.absolute.uri);
-    directories.add(slice.absolute.path);
+  final library = File(path);
+  if (!library.existsSync()) {
+    throw StateError('namida_waveform: $_ffmpegKitPackage reported $path, which does not exist.');
   }
-  return directories;
+  output.dependencies.add(library.absolute.uri);
+  return library;
 }
 
 /// Resolves a user-define holding a path. Callers register the files they use:
@@ -332,136 +313,181 @@ _FFmpegFlags? _runPkgConfig(List<String> packages, {required bool static, requir
   );
 }
 
-/// Extracts the ffmpeg-kit shared libraries for [abi] out of its `.aar` and
-/// returns the directory holding them.
-///
-/// Android links against the FFmpeg that is already inside the APK, so this
-/// package adds no decoder of its own.
-String _prepareFFmpegKitLibs(BuildInput input, BuildOutputBuilder output, String abi) {
-  final aar = _locateFFmpegKitAar(input);
-  if (aar == null) {
-    throw StateError(
-      'namida_waveform: could not find the ffmpeg-kit .aar in the pub cache. Set '
-      'hooks.user_defines.namida_waveform.$_defineFFmpegKitAar to its path, or '
-      '.$_definePrebuiltDir to a directory with a prebuilt library.',
-    );
-  }
-  output.dependencies.add(aar.uri);
-
-  final outputDirectory = Directory.fromUri(input.outputDirectoryShared.resolve('ffmpeg_kit/$abi/'));
-  final marker = File.fromUri(outputDirectory.uri.resolve('.extracted'));
-  if (marker.existsSync() && marker.readAsStringSync() == aar.path) {
-    return outputDirectory.path;
-  }
-
-  if (outputDirectory.existsSync()) outputDirectory.deleteSync(recursive: true);
-  outputDirectory.createSync(recursive: true);
-
-  print('namida_waveform: extracting $abi FFmpeg libraries from ${aar.path}');
-  final result = Platform.isWindows
-      ? Process.runSync('tar', ['-xf', aar.path, '-C', outputDirectory.path, 'jni/$abi'])
-      : Process.runSync('unzip', ['-o', '-q', '-j', aar.path, 'jni/$abi/*', '-d', outputDirectory.path]);
-  if (result.exitCode != 0) {
-    throw StateError('namida_waveform: failed to extract ${aar.path}: ${result.stderr}');
-  }
-
-  // `tar` keeps the archive's directory structure, `unzip -j` flattens it.
-  final nested = Directory('${outputDirectory.path}/jni/$abi');
-  if (nested.existsSync()) {
-    for (final entity in nested.listSync()) {
-      if (entity is File) {
-        entity.renameSync('${outputDirectory.path}/${entity.uri.pathSegments.last}');
-      }
-    }
-    Directory('${outputDirectory.path}/jni').deleteSync(recursive: true);
-  }
-
-  final libraries = outputDirectory.listSync().whereType<File>().where((e) => e.path.endsWith('.so'));
-  if (libraries.isEmpty) {
-    throw StateError('namida_waveform: no .so found for $abi inside ${aar.path}');
-  }
-
-  marker.writeAsStringSync(aar.path);
-  return outputDirectory.path;
-}
-
-File? _locateFFmpegKitAar(BuildInput input) {
-  final override = _definedPath(input, _defineFFmpegKitAar);
-  if (override != null) {
-    final file = File(override);
-    if (file.existsSync()) return file;
-    throw StateError(
-      'namida_waveform: hooks.user_defines.namida_waveform.$_defineFFmpegKitAar points at a '
-      'missing file: $override',
-    );
-  }
-
-  final found = <File>[];
-  void collect(Directory repository) {
-    if (!repository.existsSync()) return;
-    for (final candidate in repository.listSync(recursive: true)) {
-      if (candidate is File && candidate.path.endsWith('.aar')) found.add(candidate);
-    }
-  }
-
-  // The resolved package is the one the app actually links against, and the
-  // package config is always handed to the hook, unlike the environment, which
-  // is filtered and may lack the variables locating the pub cache.
-  final packageRoot = _resolvedPackageRoot('ffmpeg_kit_flutter');
-  if (packageRoot != null) collect(Directory('${packageRoot.path}/android/repo/com/local/ffmpeg-kit'));
-
-  if (found.isEmpty) {
-    final pubCache = _pubCacheDirectory();
-    final gitDirectory = pubCache == null ? null : Directory('${pubCache.path}/git');
-    if (gitDirectory != null && gitDirectory.existsSync()) {
-      for (final entity in gitDirectory.listSync()) {
-        if (entity is! Directory) continue;
-        if (!entity.uri.pathSegments.any((s) => s.startsWith('ffmpeg-kit'))) continue;
-        collect(Directory('${entity.path}/flutter/flutter/android/repo/com/local/ffmpeg-kit'));
-      }
-    }
-  }
-  if (found.isEmpty) return null;
-
-  // Prefer the full build; it carries every decoder namida can be asked about.
-  found.sort((a, b) {
-    final aFull = a.path.contains('full_binary') ? 0 : 1;
-    final bFull = b.path.contains('full_binary') ? 0 : 1;
-    if (aFull != bFull) return aFull - bFull;
-    return b.path.compareTo(a.path);
-  });
-  return found.first;
-}
-
-/// Root of [package] as resolved in the package config this hook runs with.
-Directory? _resolvedPackageRoot(String package) {
-  final packageConfig = Platform.packageConfig;
-  if (packageConfig == null) return null;
-  final file = File.fromUri(Uri.parse(packageConfig));
-  if (!file.existsSync()) return null;
-  final json = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
-  for (final entry in json['packages'] as List<Object?>) {
-    final map = entry as Map<String, Object?>;
-    if (map['name'] != package) continue;
-    final root = file.uri.resolve(map['rootUri'] as String);
-    final directory = Directory.fromUri(root);
-    return directory.existsSync() ? directory : null;
-  }
-  return null;
-}
-
-Directory? _pubCacheDirectory() {
-  if (Platform.isWindows) {
-    for (final key in ['LOCALAPPDATA', 'APPDATA']) {
-      final base = Platform.environment[key];
-      if (base == null) continue;
-      final directory = Directory('$base\\Pub\\Cache');
-      if (directory.existsSync()) return directory;
-    }
-    return null;
-  }
-  final home = Platform.environment['HOME'];
-  if (home == null) return null;
-  final directory = Directory('$home/.pub-cache');
-  return directory.existsSync() ? directory : null;
-}
+// -- obsolete: ffmpeg-kit (`ffmpeg_kit_flutter`, FFmpeg n6.0) lookups, from when the
+// -- app embedded its libraries. Replaced by [_ffmpegKitLibrary], the library
+// -- ffmpeg_kit_extended_flutter's hook reports.
+//
+//
+// /// Overrides the ffmpeg-kit `.aar` the Android build links against. Found in the
+// /// pub cache when omitted.
+// const _defineFFmpegKitAar = 'ffmpeg_kit_aar';
+//
+// /// The directory holding ffmpeg-kit's iOS `.xcframework`s, the same FFmpeg the
+// /// app embeds through the ffmpeg_kit_flutter pod. Like Android, iOS links
+// /// against it instead of carrying a second FFmpeg.
+// const _defineFFmpegKitIOSDir = 'ffmpeg_kit_ios_dir';
+//
+// /// The slice of each of [frameworks] (`<name>.xcframework/<slice>/`) matching
+// /// the device or simulator sdk being built for.
+// List<String> _iosFFmpegKitFrameworkDirectories(BuildInput input, BuildOutputBuilder output, List<String> frameworks) {
+//   final root = _definedPath(input, _defineFFmpegKitIOSDir);
+//   if (root == null || !Directory(root).existsSync()) {
+//     throw StateError(
+//       'namida_waveform: building for iOS needs hooks.user_defines.namida_waveform.$_defineFFmpegKitIOSDir '
+//       'pointing at the directory holding the iOS ffmpeg-kit xcframeworks (got "$root"), or '
+//       '.$_definePrebuiltDir pointing at a directory with a prebuilt library.',
+//     );
+//   }
+//   final isSimulator = input.config.code.iOS.targetSdk == IOSSdk.iPhoneSimulator;
+//   final directories = <String>[];
+//   for (final name in frameworks) {
+//     final xcframework = Directory('$root/$name.xcframework');
+//     final slices = xcframework.existsSync() ? xcframework.listSync().whereType<Directory>() : const <Directory>[];
+//     final slice = slices.where((e) {
+//       final sliceName = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
+//       if (!sliceName.startsWith('ios-') || sliceName.contains('maccatalyst')) return false;
+//       return sliceName.endsWith('-simulator') == isSimulator;
+//     }).firstOrNull;
+//     if (slice == null) {
+//       throw StateError('namida_waveform: ${xcframework.path} has no ${isSimulator ? 'simulator' : 'device'} slice.');
+//     }
+//     final binary = File('${slice.path}/$name.framework/$name');
+//     if (binary.existsSync()) output.dependencies.add(binary.absolute.uri);
+//     directories.add(slice.absolute.path);
+//   }
+//   return directories;
+// }
+//
+// /// Extracts the ffmpeg-kit shared libraries for [abi] out of its `.aar` and
+// /// returns the directory holding them.
+// ///
+// /// Android links against the FFmpeg that is already inside the APK, so this
+// /// package adds no decoder of its own.
+// String _prepareFFmpegKitLibs(BuildInput input, BuildOutputBuilder output, String abi) {
+//   final aar = _locateFFmpegKitAar(input);
+//   if (aar == null) {
+//     throw StateError(
+//       'namida_waveform: could not find the ffmpeg-kit .aar in the pub cache. Set '
+//       'hooks.user_defines.namida_waveform.$_defineFFmpegKitAar to its path, or '
+//       '.$_definePrebuiltDir to a directory with a prebuilt library.',
+//     );
+//   }
+//   output.dependencies.add(aar.uri);
+//
+//   final outputDirectory = Directory.fromUri(input.outputDirectoryShared.resolve('ffmpeg_kit/$abi/'));
+//   final marker = File.fromUri(outputDirectory.uri.resolve('.extracted'));
+//   if (marker.existsSync() && marker.readAsStringSync() == aar.path) {
+//     return outputDirectory.path;
+//   }
+//
+//   if (outputDirectory.existsSync()) outputDirectory.deleteSync(recursive: true);
+//   outputDirectory.createSync(recursive: true);
+//
+//   print('namida_waveform: extracting $abi FFmpeg libraries from ${aar.path}');
+//   final result = Platform.isWindows
+//       ? Process.runSync('tar', ['-xf', aar.path, '-C', outputDirectory.path, 'jni/$abi'])
+//       : Process.runSync('unzip', ['-o', '-q', '-j', aar.path, 'jni/$abi/*', '-d', outputDirectory.path]);
+//   if (result.exitCode != 0) {
+//     throw StateError('namida_waveform: failed to extract ${aar.path}: ${result.stderr}');
+//   }
+//
+//   // `tar` keeps the archive's directory structure, `unzip -j` flattens it.
+//   final nested = Directory('${outputDirectory.path}/jni/$abi');
+//   if (nested.existsSync()) {
+//     for (final entity in nested.listSync()) {
+//       if (entity is File) {
+//         entity.renameSync('${outputDirectory.path}/${entity.uri.pathSegments.last}');
+//       }
+//     }
+//     Directory('${outputDirectory.path}/jni').deleteSync(recursive: true);
+//   }
+//
+//   final libraries = outputDirectory.listSync().whereType<File>().where((e) => e.path.endsWith('.so'));
+//   if (libraries.isEmpty) {
+//     throw StateError('namida_waveform: no .so found for $abi inside ${aar.path}');
+//   }
+//
+//   marker.writeAsStringSync(aar.path);
+//   return outputDirectory.path;
+// }
+//
+// File? _locateFFmpegKitAar(BuildInput input) {
+//   final override = _definedPath(input, _defineFFmpegKitAar);
+//   if (override != null) {
+//     final file = File(override);
+//     if (file.existsSync()) return file;
+//     throw StateError(
+//       'namida_waveform: hooks.user_defines.namida_waveform.$_defineFFmpegKitAar points at a '
+//       'missing file: $override',
+//     );
+//   }
+//
+//   final found = <File>[];
+//   void collect(Directory repository) {
+//     if (!repository.existsSync()) return;
+//     for (final candidate in repository.listSync(recursive: true)) {
+//       if (candidate is File && candidate.path.endsWith('.aar')) found.add(candidate);
+//     }
+//   }
+//
+//   // The resolved package is the one the app actually links against, and the
+//   // package config is always handed to the hook, unlike the environment, which
+//   // is filtered and may lack the variables locating the pub cache.
+//   final packageRoot = _resolvedPackageRoot('ffmpeg_kit_flutter');
+//   if (packageRoot != null) collect(Directory('${packageRoot.path}/android/repo/com/local/ffmpeg-kit'));
+//
+//   if (found.isEmpty) {
+//     final pubCache = _pubCacheDirectory();
+//     final gitDirectory = pubCache == null ? null : Directory('${pubCache.path}/git');
+//     if (gitDirectory != null && gitDirectory.existsSync()) {
+//       for (final entity in gitDirectory.listSync()) {
+//         if (entity is! Directory) continue;
+//         if (!entity.uri.pathSegments.any((s) => s.startsWith('ffmpeg-kit'))) continue;
+//         collect(Directory('${entity.path}/flutter/flutter/android/repo/com/local/ffmpeg-kit'));
+//       }
+//     }
+//   }
+//   if (found.isEmpty) return null;
+//
+//   // Prefer the full build; it carries every decoder namida can be asked about.
+//   found.sort((a, b) {
+//     final aFull = a.path.contains('full_binary') ? 0 : 1;
+//     final bFull = b.path.contains('full_binary') ? 0 : 1;
+//     if (aFull != bFull) return aFull - bFull;
+//     return b.path.compareTo(a.path);
+//   });
+//   return found.first;
+// }
+//
+// /// Root of [package] as resolved in the package config this hook runs with.
+// Directory? _resolvedPackageRoot(String package) {
+//   final packageConfig = Platform.packageConfig;
+//   if (packageConfig == null) return null;
+//   final file = File.fromUri(Uri.parse(packageConfig));
+//   if (!file.existsSync()) return null;
+//   final json = jsonDecode(file.readAsStringSync()) as Map<String, Object?>;
+//   for (final entry in json['packages'] as List<Object?>) {
+//     final map = entry as Map<String, Object?>;
+//     if (map['name'] != package) continue;
+//     final root = file.uri.resolve(map['rootUri'] as String);
+//     final directory = Directory.fromUri(root);
+//     return directory.existsSync() ? directory : null;
+//   }
+//   return null;
+// }
+//
+// Directory? _pubCacheDirectory() {
+//   if (Platform.isWindows) {
+//     for (final key in ['LOCALAPPDATA', 'APPDATA']) {
+//       final base = Platform.environment[key];
+//       if (base == null) continue;
+//       final directory = Directory('$base\\Pub\\Cache');
+//       if (directory.existsSync()) return directory;
+//     }
+//     return null;
+//   }
+//   final home = Platform.environment['HOME'];
+//   if (home == null) return null;
+//   final directory = Directory('$home/.pub-cache');
+//   return directory.existsSync() ? directory : null;
+// }
