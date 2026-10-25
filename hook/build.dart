@@ -23,7 +23,8 @@ import 'package:native_toolchain_c/native_toolchain_c.dart';
 
 /// A directory holding an already built `namida_waveform_native` library for the
 /// target, looked up as `<os>/<arch>/<library>`, `<os>/<library>` or
-/// `<library>`. Bundled as-is. Falls through to a source build when the
+/// `<library>`. Bundled as-is, and only when the `version` file next to it
+/// matches this package's version. Falls through to a source build when the
 /// directory holds nothing for this target, so a checkout that has not produced
 /// the artifact yet still builds.
 const _definePrebuiltDir = 'prebuilt_dir';
@@ -189,6 +190,7 @@ File? _findPrebuilt(BuildInput input, BuildOutputBuilder output, {required OS ta
   for (final file in candidates) {
     if (file.existsSync()) {
       output.dependencies.add(file.uri);
+      _ensurePrebuiltVersion(input, output, file);
       // -- a copy, since a failed flutter build deletes the previous assets as stale outputs
       final bundledPath = input.outputDirectory.resolve(fileName).toFilePath();
       return file.copySync(bundledPath);
@@ -201,6 +203,27 @@ File? _findPrebuilt(BuildInput input, BuildOutputBuilder output, {required OS ta
     '$targetOS $arch, building from source instead.',
   );
   return null;
+}
+
+final _versionRegex = RegExp(r'^version:\s*(\S+)', multiLine: true);
+
+/// A prebuilt from older sources would miss fixes or crash on a missing symbol,
+/// so the `version` file build_waveform.sh writes next to it has to match ours.
+void _ensurePrebuiltVersion(BuildInput input, BuildOutputBuilder output, File prebuilt) {
+  final pubspecFile = File.fromUri(input.packageRoot.resolve('pubspec.yaml'));
+  final versionFile = File('${prebuilt.parent.path}/version');
+  output.dependencies.addAll([pubspecFile.uri, versionFile.uri]);
+
+  final pubspec = pubspecFile.readAsStringSync();
+  final packageVersion = _versionRegex.firstMatch(pubspec)?.group(1);
+  final prebuiltVersion = versionFile.existsSync() ? versionFile.readAsStringSync().trim() : null;
+  if (prebuiltVersion == packageVersion) return;
+
+  final prebuiltVersionText = prebuiltVersion ?? 'unknown (no version file)';
+  throw StateError(
+    'namida_waveform: ${prebuilt.path} was built from version $prebuiltVersionText, '
+    'but this package is $packageVersion. Rebuild it with build_waveform.sh, or drop $_definePrebuiltDir to build from source.',
+  );
 }
 
 class _FFmpegFlags {

@@ -15,6 +15,12 @@ extern "C" {
 /// The best audio stream of a file, decoded one frame at a time. Shared by the
 /// waveform and spectrum extractors, internal to the library.
 typedef struct {
+  /// The file itself. `fmt_ctx` reads it directly, or through `content` when
+  /// tags sit in front.
+  AVIOContext* source;
+  /// `source` from `content_start` on, so FFmpeg never sees the leading tags.
+  AVIOContext* content;
+  int64_t content_start;
   AVFormatContext* fmt_ctx;
   AVCodecContext* dec_ctx;
   /// The frame `nw_decoder_next` last produced, valid until the next call.

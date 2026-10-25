@@ -9,12 +9,92 @@
 /// wide level is left alone because the host app uses it too.
 #define NW_LOG_OFFSET 100
 
+#define NW_ID3V2_HEADER_SIZE 10
+
+/// The same check as FFmpeg's `ff_id3v2_match`.
+static int nw_is_id3v2_header(const uint8_t* header) {
+  return header[0] == 'I' && header[1] == 'D' && header[2] == '3' && header[3] != 0xff && header[4] != 0xff &&
+         (header[6] & 0x80) == 0 && (header[7] & 0x80) == 0 && (header[8] & 0x80) == 0 && (header[9] & 0x80) == 0;
+}
+
+static int64_t nw_id3v2_tag_size(const uint8_t* header) {
+  const int64_t body_size = (header[6] << 21) | (header[7] << 14) | (header[8] << 7) | header[9];
+  const int has_footer = header[5] & 0x10;
+  return NW_ID3V2_HEADER_SIZE + body_size + (has_footer ? NW_ID3V2_HEADER_SIZE : 0);
+}
+
+/// Returns where the content starts behind the ID3v2 tags in front of it, `0`
+/// when there are none, and leaves `source` there.
+static int64_t nw_seek_past_leading_tags(AVIOContext* source) {
+  int64_t content_start = 0;
+  uint8_t header[NW_ID3V2_HEADER_SIZE];
+  for (;;) {
+    const int has_header = avio_read(source, header, NW_ID3V2_HEADER_SIZE) == NW_ID3V2_HEADER_SIZE;
+    if (!has_header || !nw_is_id3v2_header(header)) break;
+    content_start += nw_id3v2_tag_size(header);
+    const int64_t position = avio_seek(source, content_start, SEEK_SET);
+    if (position < 0) return position;
+  }
+  return avio_seek(source, content_start, SEEK_SET);
+}
+
+static int nw_content_read(void* opaque, uint8_t* buf, int buf_size) {
+  const NWDecoder* decoder = (const NWDecoder*)opaque;
+  return avio_read(decoder->source, buf, buf_size);
+}
+
+static int64_t nw_content_seek(void* opaque, int64_t offset, int whence) {
+  const NWDecoder* decoder = (const NWDecoder*)opaque;
+  const int64_t content_start = decoder->content_start;
+  if (whence & AVSEEK_SIZE) {
+    const int64_t size = avio_size(decoder->source);
+    return size < 0 ? size : size - content_start;
+  }
+  const int64_t source_offset = whence == SEEK_SET ? offset + content_start : offset;
+  const int64_t position = avio_seek(decoder->source, source_offset, whence);
+  return position < 0 ? position : position - content_start;
+}
+
+/// MP3 taggers write ID3v2 tags in front of whatever the file holds. Only a
+/// few FFmpeg demuxers skip them, past 1MB FFmpeg picks the format by the
+/// extension, and containers like MP4 point at absolute offsets the tags
+/// shifted, so FFmpeg reads the file as it was before tagging.
+static int32_t nw_open_content(NWDecoder* decoder, int64_t content_start) {
+  AVIOContext* source = decoder->source;
+  const int buffer_size = source->buffer_size;
+  uint8_t* buffer = (uint8_t*)av_malloc(buffer_size);
+  if (buffer == NULL) return NW_ERR_ALLOC;
+  decoder->content = avio_alloc_context(buffer, buffer_size, 0, decoder, nw_content_read, NULL, nw_content_seek);
+  if (decoder->content == NULL) {
+    av_free(buffer);
+    return NW_ERR_ALLOC;
+  }
+  decoder->content->seekable = source->seekable;
+  decoder->content_start = content_start;
+  // reads go straight into `content`'s buffer instead of being copied through both.
+  source->direct = 1;
+  return NW_OK;
+}
+
 int32_t nw_decoder_open(NWDecoder* decoder, const char* path) {
   memset(decoder, 0, sizeof(*decoder));
   decoder->stream_index = -1;
   if (path == NULL) return NW_ERR_OPEN_INPUT;
 
-  // On failure avformat_open_input already freed the context.
+  if (avio_open(&decoder->source, path, AVIO_FLAG_READ) < 0) return NW_ERR_OPEN_INPUT;
+  const int64_t content_start = nw_seek_past_leading_tags(decoder->source);
+  if (content_start < 0) return NW_ERR_OPEN_INPUT;
+  if (content_start > 0) {
+    const int32_t error = nw_open_content(decoder, content_start);
+    if (error != NW_OK) return error;
+  }
+
+  decoder->fmt_ctx = avformat_alloc_context();
+  if (decoder->fmt_ctx == NULL) return NW_ERR_ALLOC;
+  decoder->fmt_ctx->pb = decoder->content != NULL ? decoder->content : decoder->source;
+  // The path still lets the extension settle formats the content alone can't.
+  // On failure avformat_open_input already freed the context, custom I/O is
+  // left to its owner.
   if (avformat_open_input(&decoder->fmt_ctx, path, NULL, NULL) < 0) return NW_ERR_OPEN_INPUT;
   if (avformat_find_stream_info(decoder->fmt_ctx, NULL) < 0) return NW_ERR_STREAM_INFO;
 
@@ -122,6 +202,12 @@ void nw_decoder_close(NWDecoder* decoder) {
   if (decoder->frame != NULL) av_frame_free(&decoder->frame);
   if (decoder->dec_ctx != NULL) avcodec_free_context(&decoder->dec_ctx);
   if (decoder->fmt_ctx != NULL) avformat_close_input(&decoder->fmt_ctx);
+  if (decoder->content != NULL) {
+    // avformat may have swapped the buffer for a larger one meanwhile.
+    av_freep(&decoder->content->buffer);
+    avio_context_free(&decoder->content);
+  }
+  if (decoder->source != NULL) avio_closep(&decoder->source);
 }
 
 /// Averages every channel of `frame` into mono samples at `dst`.

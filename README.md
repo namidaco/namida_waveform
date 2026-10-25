@@ -124,7 +124,7 @@ hooks:
 
 | Key | Purpose |
 | --- | --- |
-| `prebuilt_dir` | Bundle an already built library instead of compiling. Looked up as `<os>/<arch>/<library>`, `<os>/<library>`, then `<library>`. |
+| `prebuilt_dir` | Bundle an already built library instead of compiling. Looked up as `<os>/<arch>/<library>`, `<os>/<library>`, then `<library>`. The `version` file next to the library (written by `build_waveform.sh`) has to match this package's version, or the build fails. |
 | `ffmpeg_dir` | An FFmpeg install (`include/` + `lib/`) to compile against. Links statically when the prefix only carries `.a` archives. |
 
 Paths resolve against the directory of the `pubspec.yaml` declaring them. Each

@@ -1,3 +1,14 @@
+## 2.4.1
+
+- ID3v2 tags in front of a file are hidden from FFmpeg, which reads what
+  sits behind them as if it were the whole file. FFmpeg only skips them
+  itself for MP3, AAC, FLAC, TTA and WAV, so files that MP3 taggers prepended
+  tags to (MP4, WebM, Ogg, WavPack and others saved as `.mp3`) failed at any
+  tag size, and past 1MB of tags it picked the format by the extension.
+- The build hook refuses a `prebuilt_dir` library whose `version` file
+  doesn't match the package version, so a library built from older sources
+  can't ship by mistake.
+
 ## 2.4.0
 
 - Android, iOS and macOS link `libffmpegkit` from `ffmpeg_kit_extended_flutter`
