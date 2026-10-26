@@ -82,8 +82,8 @@ in), and reduced with the median-cut quantizer of Android's Palette (the same
 one `palette_generator` ports, with identical output for the same pixels). JPEG
 decodes at 1/2, 1/4 or 1/8 resolution straight out of the DCT when that still
 covers the grid. Every still image
-format the linked libavcodec carries is accepted -- JPEG, PNG, WebP, GIF, BMP
-and TIFF in the desktop build, more on Android and iOS -- and the container is
+format the linked libavcodec carries is accepted -- JPEG, PNG, WebP, GIF, BMP,
+TIFF and more -- and the container is
 detected from the bytes, never from the file name.
 
 `extractAsync` runs on a native thread of its own and posts the result back
@@ -93,43 +93,22 @@ callers that already have a worker.
 
 ## Building
 
-| Target | FFmpeg |
-| --- | --- |
-| Android / iOS / macOS | Links `libffmpegkit`, the FFmpeg `ffmpeg_kit_extended_flutter` already ships with the app, so this package adds no decoder of its own. The plugin's build hook passes the library's path to this hook. Headers of the same FFmpeg release (9.0) are vendored in `src/ffmpeg/include` to match its ABI. |
-| Linux / Windows | Links a static FFmpeg into the library, since a desktop machine is not guaranteed to have one. |
+Every platform links `libffmpegkit`, the FFmpeg that `ffmpeg_kit_extended_flutter`
+already ships with the app, so this package adds no decoder of its own. The
+plugin's build hook passes the library's path to this hook. On Windows it also
+passes the MSVC import library (`ffmpegkit.lib`) that the build links against.
+Headers of the same FFmpeg release (9.0) are vendored in `src/ffmpeg/include` to
+match its ABI.
 
-For a release, build the desktop library with `build_waveform.sh` in namida's
-`external/ffmpeg_build`, and point `prebuilt_dir` at its output. That script
-builds a decode-only FFmpeg -- every demuxer, audio decoders and parsers, the
-still image decoders and a static zlib for PNG, no network -- so the library
-imports nothing but libc/libm (Linux) or KERNEL32 and the UCRT (Windows).
+The library is compiled with the app's own C toolchain (Visual Studio on
+Windows, clang on Linux, the NDK on Android and Xcode on Apple targets), which
+Flutter builds need anyway.
 
-> Build it on the oldest glibc you support. `verify_linux.sh` fails a library
-> built on a newer one, exactly as it does for `ffmpeg`/`ffprobe`.
-
-Without `prebuilt_dir` the hook compiles from source against a system FFmpeg
-found through `pkg-config`, which is fine for development but not for shipping.
-
-## Configuration
-
-Build hooks run in a semi-hermetic environment, so environment variables never
-reach them. Configuration comes from the root package's `pubspec.yaml`:
-
-```yaml
-hooks:
-  user_defines:
-    namida_waveform:
-      prebuilt_dir: external/ffmpeg_build
-```
-
-| Key | Purpose |
-| --- | --- |
-| `prebuilt_dir` | Bundle an already built library instead of compiling. Looked up as `<os>/<arch>/<library>`, `<os>/<library>`, then `<library>`. The `version` file next to the library (written by `build_waveform.sh`) has to match this package's version, or the build fails. |
-| `ffmpeg_dir` | An FFmpeg install (`include/` + `lib/`) to compile against. Links statically when the prefix only carries `.a` archives. |
-
-Paths resolve against the directory of the `pubspec.yaml` declaring them. Each
-is optional and falls through to the next option when it holds nothing for the
-target, so a checkout that has not built the artifacts still compiles.
+> [!NOTE]
+> It needs the namida fork of the plugin with builders 0.11.5 or newer. Older
+> Windows bundles don't export the FFmpeg API. On older Linux bundles a system
+> FFmpeg in the same process (loaded by libmpv) can take over the library's
+> FFmpeg calls.
 
 ## Credits
 

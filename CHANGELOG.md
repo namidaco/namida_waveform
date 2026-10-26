@@ -1,3 +1,10 @@
+## 2.5.0
+
+- Linux and Windows link `libffmpegkit` from `ffmpeg_kit_extended_flutter`
+  like the other platforms, instead of a static FFmpeg of their own. It needs
+  the plugin with builders 0.11.5 or newer, whose Windows DLL exports the
+  FFmpeg API. The `prebuilt_dir` and `ffmpeg_dir` user-defines are gone.
+
 ## 2.4.1
 
 - ID3v2 tags in front of a file are hidden from FFmpeg, which reads what
